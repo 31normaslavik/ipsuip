@@ -42,6 +42,12 @@ struct Target {
   std::string all_ip_direct_download; // абсолютный URL выгрузки всех IP (может быть пустым)
 };
 
+// Результат разбора одной страницы: либо навигация по иерархии, либо IP-список.
+struct PageContent {
+  std::vector<Target> targets;
+  std::vector<std::string> ip_ranges;
+};
+
 // ---- вспомогательные --------------------------------------------------
 
 static std::string trim(const std::string& s) {
@@ -303,10 +309,118 @@ std::vector<Target> parse_targets(const std::string& html,
   return targets;
 }
 
+// ---- разбор списка IP-диапазонов ---------------------------------------
+
+static bool is_ipv4(const std::string& s) {
+  int parts = 0;
+  size_t start = 0;
+  while (start <= s.size()) {
+    size_t end = s.find('.', start);
+    if (end == std::string::npos) end = s.size();
+
+    std::string part = s.substr(start, end - start);
+    if (part.empty() || part.size() > 3) return false;
+    for (char c : part)
+      if (!std::isdigit(static_cast<unsigned char>(c))) return false;
+    if (std::stoi(part) > 255) return false;
+
+    ++parts;
+    if (end == s.size()) break;
+    start = end + 1;
+  }
+  return parts == 4;
+}
+
+static bool is_ipv6(const std::string& s) {
+  if (s.find(':') == std::string::npos) return false;
+  for (char c : s)
+    if (!std::isxdigit(static_cast<unsigned char>(c)) && c != ':') return false;
+
+  size_t double_colon = s.find("::");
+  if (double_colon != std::string::npos &&
+      s.find("::", double_colon + 1) != std::string::npos)
+    return false;
+
+  int groups = 0;
+  size_t start = 0;
+  while (start <= s.size()) {
+    size_t end = s.find(':', start);
+    if (end == std::string::npos) end = s.size();
+
+    std::string group = s.substr(start, end - start);
+    if (group.size() > 4) return false;
+    if (!group.empty()) ++groups;
+
+    if (end == s.size()) break;
+    start = end + 1;
+  }
+
+  return double_colon != std::string::npos ? groups <= 7 : groups == 8;
+}
+
+// Строка вида "192.168.1.0-192.168.255.255" или "2a03:d000:8000::-2a03:d000:8000:ffff:ffff:ffff:ffff:ffff".
+static bool is_ip_range(const std::string& s) {
+  size_t dash = s.find('-');
+  if (dash == std::string::npos || s.find('-', dash + 1) != std::string::npos)
+    return false;
+
+  std::string first = s.substr(0, dash);
+  std::string last = s.substr(dash + 1);
+  return (is_ipv4(first) && is_ipv4(last)) || (is_ipv6(first) && is_ipv6(last));
+}
+
+static void collect_elements_by_tag(lxb_dom_node_t* node, const char* name,
+                                    std::vector<lxb_dom_element_t*>& out) {
+  const size_t name_len = std::strlen(name);
+  for (lxb_dom_node_t* c = node->first_child; c; c = c->next) {
+    if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
+
+    auto* el = lxb_dom_interface_element(c);
+    size_t len = 0;
+    const lxb_char_t* tag = lxb_dom_element_local_name(el, &len);
+    if (tag && len == name_len &&
+        std::strncmp(reinterpret_cast<const char*>(tag), name, name_len) == 0)
+      out.push_back(el);
+
+    collect_elements_by_tag(c, name, out);
+  }
+}
+
+// Страница с IP-адресами содержит <pre>, в котором каждая строка — диапазон.
+// Возвращает только валидные диапазоны, без тегов и служебного текста.
+std::vector<std::string> parse_ip_ranges(const std::string& html) {
+  std::vector<std::string> ranges;
+
+  lxb_html_document_t* doc = lxb_html_document_create();
+  if (!doc) return ranges;
+
+  lxb_status_t st = lxb_html_document_parse(
+      doc, reinterpret_cast<const lxb_char_t*>(html.data()), html.size());
+  if (st != LXB_STATUS_OK) {
+    lxb_html_document_destroy(doc);
+    return ranges;
+  }
+
+  std::vector<lxb_dom_element_t*> pres;
+  collect_elements_by_tag(reinterpret_cast<lxb_dom_node_t*>(doc), "pre", pres);
+
+  for (auto* pre : pres) {
+    std::string text = node_text(reinterpret_cast<lxb_dom_node_t*>(pre));
+    std::istringstream ss(text);
+    for (std::string line; std::getline(ss, line);) {
+      line = trim(line);
+      if (!line.empty() && is_ip_range(line)) ranges.push_back(std::move(line));
+    }
+  }
+
+  lxb_html_document_destroy(doc);
+  return ranges;
+}
+
 // ---- сеть --------------------------------------------------------------
 
-// Скачивает страницу и сразу разбирает её (boost/beast + lexbor).
-std::vector<Target> fetch_targets(const std::string& page_url) {
+// Скачивает страницу и разбирает её (boost/beast + lexbor).
+PageContent fetch_page(const std::string& page_url) {
   const std::string scheme = "https://";
   if (!starts_with(page_url, scheme))
     throw std::runtime_error("Only https:// URLs are supported: " + page_url);
@@ -334,8 +448,11 @@ std::vector<Target> fetch_targets(const std::string& page_url) {
    }
     ofs.close();
   }
-  
-  return parse_targets(html, scheme + host + "/");
+
+  PageContent page;
+  page.targets = parse_targets(html, scheme + host + "/");
+  page.ip_ranges = parse_ip_ranges(html);
+  return page;
 }
 
 
@@ -476,12 +593,12 @@ int lexbor_test(const std::string &str) {
 
 int main(int argc, char **argv) {
   try {
-    std::vector<Target> targets;
+    PageContent page;
 
     if (argc == 2) {
       // Режим сети: любая страница иерархии, например
       // ./ipsuip_develop "https://suip.biz/?act=all-country-ip&country=BY"
-      targets = fetch_targets(argv[1]);
+      page = fetch_page(argv[1]);
     } else {
       // Оффлайн-режим: разбор локального файла из текущего каталога.
       std::cout << std::filesystem::current_path() << "\n";
@@ -500,15 +617,21 @@ int main(int argc, char **argv) {
         all_file.append("\n");
       }
 
-      targets = parse_targets(all_file);
+      page.targets = parse_targets(all_file);
+      page.ip_ranges = parse_ip_ranges(all_file);
     }
 
-    for (const auto& t : targets) {
-      std::cout << "[" << level_name(t.level) << "]"
-                << " CODE=" << t.code
-                << " | Location=" << t.location
-                << " | Adress=" << t.address
-                << " | ALL_IP_Direct_Download=" << t.all_ip_direct_download << "\n";
+    // Страница с IP-адресами: выводим только сами диапазоны.
+    if (!page.ip_ranges.empty()) {
+      for (const auto& range : page.ip_ranges) std::cout << range << "\n";
+    } else {
+      for (const auto& t : page.targets) {
+        std::cout << "[" << level_name(t.level) << "]"
+                  << " CODE=" << t.code
+                  << " | Location=" << t.location
+                  << " | Adress=" << t.address
+                  << " | ALL_IP_Direct_Download=" << t.all_ip_direct_download << "\n";
+      }
     }
 
   } catch (std::exception &e) {
