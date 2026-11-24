@@ -11,8 +11,7 @@
 
 namespace ipsuip {
 
-// Путь к файлу кэша: $XDG_CONFIG_HOME/suipbiz/data.json,
-// иначе ~/.config/suipbiz/data.json.
+// Путь к файлу кэша: ~/.cache/ipsuip/data.json.
 std::filesystem::path default_cache_path();
 
 // Кэш навигационных страниц: URL -> список целей.
@@ -33,6 +32,9 @@ public:
   // или его не удалось записать (save).
   bool load();
   bool save() const;
+
+  // Полностью очищает кэш: удаляет память и файл на диске.
+  void clear();
 
   const std::filesystem::path &path() const { return path_; }
   size_t size() const { return pages_.size(); }

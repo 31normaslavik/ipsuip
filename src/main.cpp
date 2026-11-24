@@ -2,6 +2,10 @@
 
 #include "ip_convert.h"
 #include "ipsuip_tui.h"
+#include "http_client_sync_ssl.h"
+#include "config.h"
+#include "progress.h"
+#include "proxy.h"
 #include "suip_cache.h"
 #include "suip_model.h"
 
@@ -215,12 +219,12 @@ struct LoadedPage {
 // Загружает страницу. Навигационные страницы берутся из кэша (кроме
 // --refresh), страницы с IP-диапазонами запрашиваются заново и не кэшируются.
 LoadedPage load_page(const std::string &url, ipsuip::NavCache &cache,
-                     bool refresh) {
+                     bool refresh, const ipsuip::ProgressCallback &progress) {
   if (!refresh)
     if (const std::vector<Target> *cached = cache.find(url))
       return LoadedPage{*cached, {}};
 
-  PageContent page = fetch_page(url);
+  PageContent page = fetch_page(url, progress);
   // Страница с IP-диапазонами: всегда заново и никогда в кэш.
   if (!page.ip_ranges.empty()) return LoadedPage{{}, std::move(page.ip_ranges)};
   if (page.targets.empty()) return LoadedPage{{}, {}};
@@ -244,9 +248,10 @@ bool write_lines(const std::filesystem::path &path,
 // Скачивает все IP цели и пишет два файла: диапазоны и CIDR.
 // known — уже загруженные диапазоны (страница города), чтобы не качать дважды.
 int save_all_ips(const Target &target, const std::vector<std::string> &known,
-                 const std::string &output_dir) {
+                 const std::string &output_dir,
+                 const ipsuip::ProgressCallback &progress) {
   std::vector<std::string> ranges = known;
-  if (ranges.empty()) ranges = fetch_ip_ranges(all_ip_url(target));
+  if (ranges.empty()) ranges = fetch_ip_ranges(all_ip_url(target), progress);
 
   if (ranges.empty()) {
     std::cerr << "Диапазоны IP не найдены: " << target_label(target) << "\n";
@@ -287,8 +292,11 @@ struct Options {
   bool tui = false;
   bool help = false;
   bool refresh = false;
+  bool quiet = false;      // --quiet — не показывать прогресс в stderr
   std::string output_dir;
   std::string url;
+  std::string proxy;       // --proxy URL (пустая — не использовать)
+  bool no_proxy = false;   // --no-proxy — явно отключить прокси
   LevelArg continent, country, province, city;
 };
 
@@ -296,32 +304,38 @@ void print_usage(std::ostream &os) {
   os << "Списки IP-адресов suip.biz\n"
         "\n"
         "Использование:\n"
-        "  ipsuip_develop --tui\n"
+        "  ipsuip --tui\n"
         "      интерактивный браузер иерархии\n"
-        "  ipsuip_develop --mainland\n"
+        "  ipsuip --mainland\n"
         "      список континентов\n"
-        "  ipsuip_develop --mainland EU --country\n"
+        "  ipsuip --mainland EU --country\n"
         "      список стран континента\n"
-        "  ipsuip_develop --mainland EU --country RU --province\n"
+        "  ipsuip --mainland EU --country RU --province\n"
         "      список регионов страны\n"
-        "  ipsuip_develop --mainland EU --country RU --province Chelyabinsk --city\n"
+        "  ipsuip --mainland EU --country RU --province Chelyabinsk --city\n"
         "      список городов региона\n"
-        "  ipsuip_develop --mainland EU --country RU --province Chelyabinsk --city Kartaly\n"
+        "  ipsuip --mainland EU --country RU --province Chelyabinsk --city Kartaly\n"
         "      диапазоны IP цели\n"
-        "  ipsuip_develop ... --output DIR\n"
+        "  ipsuip ... --output DIR\n"
         "      сохранить диапазоны (RANGE и CIDR) в каталог DIR\n"
         "\n"
         "Флаг уровня без значения выводит список этого уровня, со значением —\n"
         "выбирает цель по коду или названию. --refresh игнорирует кэш\n"
         "навигационных страниц. --help показывает эту справку.\n"
+        "--quiet отключает индикатор прогресса загрузки в stderr.\n"
         "\n"
-        "Кэш: $XDG_CONFIG_HOME/suipbiz/data.json (по умолчанию\n"
-        "~/.config/suipbiz/data.json). Страницы с IP-адресами не кэшируются.\n";
+        "Прокси: --proxy URL устанавливает прокси для всех запросов\n"
+        "  (http://[user:pass@]host:port, socks5://host:port).\n"
+        "  --no-proxy отключает прокси из конфига.\n"
+        "  Без флагов используется proxy из config.json.\n"
+        "\n"
+        "Кэш: ~/.cache/ipsuip/data.json. Страницы с IP-адресами не кэшируются.\n";
 }
 
-int run_console(const Options &opt) {
+int run_console(const Options &opt,
+                const ipsuip::ProgressCallback &progress) {
   ipsuip::NavCache cache;
-  LoadedPage page = load_page(kRootUrl, cache, opt.refresh);
+  LoadedPage page = load_page(kRootUrl, cache, opt.refresh, progress);
 
   const struct {
     TargetLevel level;
@@ -365,7 +379,7 @@ int run_console(const Options &opt) {
 
     selected = *found;
     have_selected = true;
-    page = load_page(selected.address, cache, opt.refresh);
+    page = load_page(selected.address, cache, opt.refresh, progress);
   }
 
   if (!opt.output_dir.empty()) {
@@ -375,7 +389,7 @@ int run_console(const Options &opt) {
     }
     // Для города диапазоны уже на его странице, для остальных уровней —
     // отдельная выгрузка всех IP.
-    return save_all_ips(selected, page.ranges, opt.output_dir);
+    return save_all_ips(selected, page.ranges, opt.output_dir, progress);
   }
 
   if (!page.ranges.empty()) {
@@ -405,6 +419,17 @@ bool parse_args(int argc, char **argv, Options &opt, std::string &error) {
       opt.tui = true;
     else if (arg == "--refresh")
       opt.refresh = true;
+    else if (arg == "--quiet")
+      opt.quiet = true;
+    else if (arg == "--no-proxy")
+      opt.no_proxy = true;
+    else if (arg == "--proxy") {
+      if (i + 1 >= argc) {
+        error = "--proxy требует URL";
+        return false;
+      }
+      opt.proxy = argv[++i];
+    }
     else if (arg == "--mainland" || arg == "--continent")
       take_value(opt.continent);
     else if (arg == "--country")
@@ -445,7 +470,28 @@ int main(int argc, char **argv) {
     return 0;
   }
 
+  // В TUI прогресс рисуется в статусной строке, а не в stderr.
+  ipsuip::ProgressDisplay progress(!opt.quiet && !opt.tui);
+  const ipsuip::ProgressCallback on_progress = progress.callback();
+
   try {
+    // Применяем прокси: CLI > конфиг > ничего
+    if (opt.no_proxy) {
+      ipsuip::clear_proxy();
+    } else if (!opt.proxy.empty()) {
+      ipsuip::set_proxy(opt.proxy);
+    } else {
+      const ipsuip::Config cfg = ipsuip::load_config();
+      if (!cfg.proxy.empty()) {
+        std::string proxy_error;
+        if (!ipsuip::is_valid_proxy(cfg.proxy, &proxy_error))
+          std::cerr << "Предупреждение: некорректный прокси в конфиге: "
+                    << proxy_error << "\n";
+        else
+          ipsuip::set_proxy(cfg.proxy);
+      }
+    }
+
     if (opt.tui)
       // Интерактивный режим: по умолчанию начинаем с корня иерархии.
       return ipsuip::run_tui(opt.url.empty() ? kRootUrl : opt.url);
@@ -460,7 +506,8 @@ int main(int argc, char **argv) {
 
     if (!opt.url.empty()) {
       // Прямой URL страницы: печать её содержимого.
-      const PageContent page = fetch_page(opt.url);
+      const PageContent page = fetch_page(opt.url, on_progress);
+      progress.finish();
       if (!page.ip_ranges.empty())
         for (const auto &range : page.ip_ranges) std::cout << range << "\n";
       else
@@ -468,9 +515,12 @@ int main(int argc, char **argv) {
       return 0;
     }
 
-    return run_console(opt);
+    const int result = run_console(opt, on_progress);
+    progress.finish();
+    return result;
 
   } catch (std::exception &e) {
+    progress.finish();
     std::cerr << e.what() << std::endl;
     return 1;
   }

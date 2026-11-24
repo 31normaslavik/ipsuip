@@ -1,6 +1,6 @@
 #pragma once
 
-/** Интерактивный TUI-браузер иерархии suip.biz (ncursesw). **/
+/** Интерактивный TUI-браузер иерархии suip.biz (PDCursesMod). **/
 
 #include <string>
 

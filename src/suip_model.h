@@ -2,6 +2,8 @@
 
 /** Общая модель данных suip.biz: цель иерархии, содержимое страницы. **/
 
+#include "http_client_sync_ssl.h"
+
 #include <string>
 #include <vector>
 
@@ -53,10 +55,14 @@ std::vector<std::string> parse_ip_ranges(const std::string &html);
 std::vector<std::string> extract_ip_ranges(const std::string &html);
 
 // Скачивает страницу по https-URL и разбирает её.
-PageContent fetch_page(const std::string &page_url);
+// progress — необязательный коллбэк прогресса загрузки.
+PageContent fetch_page(const std::string &page_url,
+                       const ipsuip::ProgressCallback &progress = {});
 
 // Скачивает страницу с IP-адресами и возвращает только диапазоны.
-std::vector<std::string> fetch_ip_ranges(const std::string &page_url);
+// Большие выгрузки потоково пишутся во временный файл.
+std::vector<std::string> fetch_ip_ranges(const std::string &page_url,
+                                         const ipsuip::ProgressCallback &progress = {});
 
 // URL со всеми IP цели: готовая ссылка выгрузки, иначе конструируется из
 // address. Для города парной ссылки "&all" нет — используется страница города.

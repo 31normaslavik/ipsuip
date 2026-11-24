@@ -1,17 +1,21 @@
 #include "ipsuip_tui.h"
 
 #include "ip_convert.h"
+#include "config.h"
+#include "progress.h"
+#include "proxy.h"
 #include "suip_cache.h"
 #include "suip_model.h"
 
-#include <ncurses.h>
+#include <curses.h>
 
 #include <algorithm>
+#include <chrono>
 #include <clocale>
+#include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <iostream>
-#include <sstream>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,8 +46,17 @@ struct State {
   std::string root_url;
   std::vector<Frame> stack; // стек навигации
   NavCache cache;           // общий JSON-кэш навигационных страниц
+  Config config;            // конфиг (прокси), сохраняется из меню настроек
   std::string status;       // сообщение в статусной строке
   bool status_error = false;
+};
+
+// Состояние одного запроса для отрисовки прогресса в статусной строке.
+struct DownloadMeter {
+  std::chrono::steady_clock::time_point start =
+      std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point last_draw{};
+  std::string last_text;
 };
 
 enum class SaveFormat { Ranges, Cidr };
@@ -99,6 +112,38 @@ void set_status(State &st, std::string text, bool error) {
 void clear_status(State &st) {
   st.status.clear();
   st.status_error = false;
+}
+
+// Коллбэк загрузки: проценты/байты/скорость в статусной строке.
+// Обновление экрана троттлится; draw() вызывается напрямую, так как запрос
+// синхронный и цикл обработки клавиш в это время не работает.
+void draw(State &st);
+
+ProgressCallback make_progress(State &st) {
+  auto meter = std::make_shared<DownloadMeter>();
+  return [&st, meter](std::uint64_t downloaded, std::uint64_t total) -> bool {
+    const auto now = std::chrono::steady_clock::now();
+    const double elapsed =
+        std::chrono::duration<double>(now - meter->start).count();
+    const double speed =
+        elapsed > 0 ? static_cast<double>(downloaded) / elapsed : 0;
+
+    std::string text = "Загрузка: " + human_bytes(downloaded);
+    if (total > 0) {
+      const int pct = static_cast<int>(100.0 * downloaded / total);
+      text += " / " + human_bytes(total) + " (" + std::to_string(pct) + "%)";
+    }
+    text += "  " + format_speed(speed);
+
+    if (text != meter->last_text &&
+        now - meter->last_draw >= std::chrono::milliseconds(100)) {
+      meter->last_text = text;
+      meter->last_draw = now;
+      set_status(st, text, false);
+      draw(st);
+    }
+    return true;
+  };
 }
 
 // ---- отрисовка ---------------------------------------------------------
@@ -195,8 +240,8 @@ void draw(State &st) {
   // подсказка по клавишам
   if (hint_row >= 0) {
     const std::string hint =
-        "↑/↓ k/j выбор  PgUp/PgDn Home/End  Enter открыть  "
-        "Backspace/Esc назад  q выход";
+        "↑/↓ k/j выбор  Enter открыть  s настройки  "
+        "PgUp/PgDn Home/End  Backspace/Esc назад  q выход";
     attron(A_DIM);
     mvaddstr(hint_row, 0, clip_utf8(hint, cols).c_str());
     attroff(A_DIM);
@@ -209,8 +254,7 @@ void draw(State &st) {
 
 // Загружает страницу: навигационные берутся из общего кэша, страницы
 // с IP-адресами всегда запрашиваются заново и в кэш не попадают.
-// Библиотека http_client пишет служебные сообщения в stdout/stderr,
-// поэтому на время запроса оба потока перенаправляются в буфер.
+// Прогресс загрузки рисуется в статусной строке через коллбэк.
 PageContent load(State &st, const std::string &url) {
   if (const std::vector<Target> *cached = st.cache.find(url))
     return PageContent{*cached, {}};
@@ -218,20 +262,7 @@ PageContent load(State &st, const std::string &url) {
   set_status(st, "Загрузка " + url + " ...", false);
   draw(st);
 
-  std::ostringstream sink;
-  std::streambuf *old_out = std::cout.rdbuf(sink.rdbuf());
-  std::streambuf *old_err = std::cerr.rdbuf(sink.rdbuf());
-
-  PageContent page;
-  try {
-    page = fetch_page(url);
-  } catch (...) {
-    std::cout.rdbuf(old_out);
-    std::cerr.rdbuf(old_err);
-    throw;
-  }
-  std::cout.rdbuf(old_out);
-  std::cerr.rdbuf(old_err);
+  PageContent page = fetch_page(url, make_progress(st));
 
   // Страницы с IP-адресами (у них может быть только ссылка на себя)
   // в кэш не попадают.
@@ -296,9 +327,9 @@ std::vector<std::string> to_cidr(const std::vector<std::string> &ranges) {
   return ranges_to_cidr(ranges);
 }
 
-// Меню из двух пунктов. Возвращает false при отмене (Esc).
-bool choose_format(const std::string &name, size_t count, SaveFormat &format) {
-  static const char *kItems[] = {"Сохранить как Range", "Сохранить как Cidr"};
+// Универсальное меню в центре экрана. Возвращает номер пункта или -1 (Esc).
+int choose_item(const std::string &title, const std::vector<std::string> &items,
+                const std::string &extra = {}) {
   int sel = 0;
 
   for (;;) {
@@ -306,46 +337,64 @@ bool choose_format(const std::string &name, size_t count, SaveFormat &format) {
     int cols = 0;
     getmaxyx(stdscr, rows, cols);
 
-    int w = std::min(cols - 2, 52);
-    if (w < 24) w = cols > 4 ? cols - 2 : 1;
-    const int h = 8;
+    int w = std::min(cols - 2, 56);
+    if (w < 16) w = cols > 4 ? cols - 2 : 1;
+    const int h = std::min(rows > 0 ? rows : 1,
+                           5 + static_cast<int>(items.size()) +
+                               (extra.empty() ? 0 : 1));
     const int y = std::max(0, (rows - h) / 2);
     const int x = std::max(0, (cols - w) / 2);
 
     WINDOW *win = newwin(h, w, y, x);
-    if (!win) return false;
+    if (!win) return -1;
     keypad(win, TRUE);
     box(win, 0, 0);
 
-    mvwaddstr(win, 0, 2, clip_utf8(" " + name + " ", w - 4).c_str());
-    mvwaddstr(win, 1, 2,
-              clip_utf8(std::to_string(count) + " диапазон(ов)", w - 4).c_str());
+    int line = 1;
+    mvwaddstr(win, 0, 2, clip_utf8(" " + title + " ", w - 4).c_str());
+    if (!extra.empty()) {
+      mvwaddstr(win, line++, 2, clip_utf8(extra, w - 4).c_str());
+    }
+    line++; // пустая строка перед пунктами
 
-    for (int i = 0; i < 2; ++i) {
-      const std::string line =
-          std::string(i == sel ? "> " : "  ") + kItems[i];
-      if (i == sel) wattron(win, A_REVERSE);
-      mvwaddstr(win, 3 + i, 2, clip_utf8(line, w - 4).c_str());
-      if (i == sel) wattroff(win, A_REVERSE);
+    for (size_t i = 0; i < items.size() && line < h - 2; ++i, ++line) {
+      const std::string text =
+          std::string(i == static_cast<size_t>(sel) ? "> " : "  ") + items[i];
+      if (i == static_cast<size_t>(sel)) wattron(win, A_REVERSE);
+      mvwaddstr(win, line, 2, clip_utf8(text, w - 4).c_str());
+      if (i == static_cast<size_t>(sel)) wattroff(win, A_REVERSE);
     }
 
-    mvwaddstr(win, h - 2, 2,
-              clip_utf8("Enter - выбрать, Esc - отмена", w - 4).c_str());
+    if (h >= 2)
+      mvwaddstr(win, h - 2, 2,
+                clip_utf8("↑/↓ выбор  Enter - выбрать  Esc - отмена", w - 4)
+                    .c_str());
     wrefresh(win);
 
     const int ch = wgetch(win);
     delwin(win);
     touchwin(stdscr);
 
-    if (ch == KEY_UP || ch == 'k' || ch == KEY_DOWN || ch == 'j') {
-      sel = (sel + 1) % 2; // пунктов всего два
+    if (ch == KEY_UP || ch == 'k') {
+      if (sel > 0) --sel;
+    } else if (ch == KEY_DOWN || ch == 'j') {
+      if (sel + 1 < static_cast<int>(items.size())) ++sel;
     } else if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
-      format = sel == 0 ? SaveFormat::Ranges : SaveFormat::Cidr;
-      return true;
+      return sel;
     } else if (ch == 27) {
-      return false;
+      return -1;
     }
   }
+}
+
+// Меню из двух пунктов. Возвращает false при отмене (Esc).
+bool choose_format(const std::string &name, size_t count, SaveFormat &format) {
+  const int sel = choose_item(
+      name, {"Сохранить как Range", "Сохранить как Cidr"},
+      std::to_string(count) + " диапазон(ов)");
+  if (sel < 0) return false;
+  format = sel == 0 ? SaveFormat::Ranges : SaveFormat::Cidr;
+  return true;
 }
 
 void offer_save(State &st, const std::string &name,
@@ -375,6 +424,86 @@ void offer_save(State &st, const std::string &name,
   set_status(st, "Сохранено " + std::to_string(lines.size()) + " строк в " +
                      path,
              false);
+}
+
+// ---- настройки ---------------------------------------------------------
+
+// Диалог ввода прокси. Пустая строка отключает прокси.
+// Валидация и применение выполняются сразу по Enter, конфиг сохраняется.
+void proxy_dialog(State &st) {
+  std::string input = st.config.proxy;
+  std::string error;
+
+  for (;;) {
+    int rows = 0;
+    int cols = 0;
+    getmaxyx(stdscr, rows, cols);
+
+    const int w = std::max(20, std::min(cols - 2, 72));
+    const int h = std::min(rows > 0 ? rows : 1, error.empty() ? 8 : 9);
+    const int y = std::max(0, (rows - h) / 2);
+    const int x = std::max(0, (cols - w) / 2);
+
+    WINDOW *win = newwin(h, w, y, x);
+    if (!win) return;
+    keypad(win, TRUE);
+    box(win, 0, 0);
+
+    mvwaddstr(win, 0, 2, " Прокси ");
+    mvwaddstr(win, 2, 2, clip_utf8(
+        "Формат: http://[user:pass@]host:port, socks5://host:port", w - 4).c_str());
+    mvwaddstr(win, 3, 2, clip_utf8("Значение: " + input + "_", w - 4).c_str());
+    if (!error.empty()) {
+      if (has_colors()) wattron(win, COLOR_PAIR(1));
+      mvwaddstr(win, 4, 2, clip_utf8(error, w - 4).c_str());
+      if (has_colors()) wattroff(win, COLOR_PAIR(1));
+    }
+    mvwaddstr(win, h - 2, 2,
+              clip_utf8("Enter - применить, Esc - отмена", w - 4).c_str());
+
+    curs_set(1);
+    wrefresh(win);
+    const int ch = wgetch(win);
+    curs_set(0);
+    delwin(win);
+    touchwin(stdscr);
+
+    if (ch == 27) return;
+
+    if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+      if (!is_valid_proxy(input, &error)) continue;
+
+      if (input.empty()) {
+        clear_proxy();
+        set_status(st, "Прокси отключён", false);
+      } else {
+        set_proxy(input);
+        set_status(st, "Прокси применён: " + input, false);
+      }
+      st.config.proxy = input;
+      if (!save_config(st.config))
+        set_status(st, "Прокси применён, но не сохранён в config.json", true);
+      return;
+    }
+
+    if (ch == KEY_BACKSPACE || ch == 8 || ch == 127) {
+      if (!input.empty()) input.pop_back();
+    } else if (ch >= 32 && ch < 127) {
+      input += static_cast<char>(ch);
+    }
+    error.clear();
+  }
+}
+
+void settings_menu(State &st) {
+  const int sel = choose_item(
+      "Настройки", {"Очистить кэш", "Прокси", "Назад"});
+  if (sel == 0) {
+    st.cache.clear();
+    set_status(st, "Кэш очищен", false);
+  } else if (sel == 1) {
+    proxy_dialog(st);
+  }
 }
 
 // ---- навигация ---------------------------------------------------------
@@ -415,20 +544,8 @@ void download_all(State &st, const Frame &f) {
   set_status(st, "Загрузка всех IP: " + f.title + " ...", false);
   draw(st);
 
-  std::vector<std::string> ranges;
-  std::ostringstream sink;
-  std::streambuf *old_out = std::cout.rdbuf(sink.rdbuf());
-  std::streambuf *old_err = std::cerr.rdbuf(sink.rdbuf());
-
-  try {
-    ranges = fetch_ip_ranges(f.download_url);
-  } catch (...) {
-    std::cout.rdbuf(old_out);
-    std::cerr.rdbuf(old_err);
-    throw;
-  }
-  std::cout.rdbuf(old_out);
-  std::cerr.rdbuf(old_err);
+  std::vector<std::string> ranges =
+      fetch_ip_ranges(f.download_url, make_progress(st));
 
   offer_save(st, f.title, ranges);
 }
@@ -454,7 +571,6 @@ int run_tui(const std::string &root_url) {
   noecho();
   keypad(stdscr, TRUE);
   curs_set(0);
-  set_escdelay(25);
   if (has_colors()) {
     start_color();
     use_default_colors();
@@ -463,6 +579,16 @@ int run_tui(const std::string &root_url) {
 
   State st;
   st.root_url = root_url;
+  st.config = load_config();
+  if (!st.config.proxy.empty()) {
+    std::string error;
+    if (!is_valid_proxy(st.config.proxy, &error)) {
+      st.config.proxy.clear();
+      set_status(st, "Некорректный прокси в конфиге: " + error, true);
+    } else {
+      set_proxy(st.config.proxy);
+    }
+  }
 
   try {
     const PageContent &root = load(st, root_url);
@@ -549,6 +675,12 @@ int run_tui(const std::string &root_url) {
           st.stack.pop_back();
           clear_status(st);
         }
+        break;
+
+      case 's':
+      case 'S':
+      case KEY_F(2):
+        settings_menu(st);
         break;
 
       case KEY_RESIZE:

@@ -7,6 +7,9 @@
 
 #include <cctype>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <functional>
 #include <sstream>
 #include <stdexcept>
 #include <unordered_map>
@@ -267,21 +270,11 @@ static void collect_elements_by_tag(lxb_dom_node_t *node, const char *name,
 // ---- сеть --------------------------------------------------------------
 
 // Скачивает произвольный https-URL и возвращает тело ответа.
-static std::string http_get_url(const std::string &page_url) {
-  const std::string scheme = "https://";
-  if (!starts_with(page_url, scheme))
-    throw std::runtime_error("Only https:// URLs are supported: " + page_url);
-
-  size_t host_end = page_url.find('/', scheme.size());
-  std::string host = page_url.substr(
-      scheme.size(), host_end == std::string::npos ? std::string::npos
-                                                   : host_end - scheme.size());
-  if (host.empty())
-    throw std::runtime_error("Cannot extract host from URL: " + page_url);
-
-  std::string target =
-      host_end == std::string::npos ? "/" : page_url.substr(host_end);
-  return ipsuip::get(host, target);
+static std::string http_get_url(const std::string &page_url,
+                                const ipsuip::ProgressCallback &progress) {
+  ipsuip::GetOptions opts;
+  opts.progress = progress;
+  return ipsuip::get(page_url, opts);
 }
 
 // ---- публичный API -----------------------------------------------------
@@ -414,8 +407,9 @@ std::vector<std::string> extract_ip_ranges(const std::string &html) {
 }
 
 // Скачивает страницу и разбирает её (boost/beast + lexbor).
-PageContent fetch_page(const std::string &page_url) {
-  const std::string html = http_get_url(page_url);
+PageContent fetch_page(const std::string &page_url,
+                       const ipsuip::ProgressCallback &progress) {
+  const std::string html = http_get_url(page_url, progress);
   const size_t host_end = page_url.find('/', std::strlen("https://"));
   const std::string base =
       page_url.substr(0, host_end == std::string::npos ? page_url.size()
@@ -429,8 +423,40 @@ PageContent fetch_page(const std::string &page_url) {
 }
 
 // Скачивает страницу с IP-адресами и возвращает только диапазоны.
-std::vector<std::string> fetch_ip_ranges(const std::string &page_url) {
-  return extract_ip_ranges(http_get_url(page_url));
+// Использует потоковую загрузку во временный файл для больших выгрузок.
+std::vector<std::string> fetch_ip_ranges(const std::string &page_url,
+                                         const ipsuip::ProgressCallback &progress) {
+  // Пытаемся скачать во временный файл
+  std::error_code ec;
+  std::filesystem::path tmp =
+      std::filesystem::temp_directory_path(ec) /
+      ("ipsuip_dl_" + std::to_string(std::hash<std::string>{}(page_url)) + ".tmp");
+  if (ec) tmp = "ipsuip_dl.tmp";
+
+  try {
+    ipsuip::GetOptions opts;
+    opts.progress = progress;
+    ipsuip::get_to_file(page_url, tmp.string(), opts);
+
+    // Читаем построчно из файла — валидные диапазоны
+    std::vector<std::string> ranges;
+    std::ifstream ifs(tmp);
+    if (ifs) {
+      for (std::string line; std::getline(ifs, line);) {
+        line = trim(line);
+        if (!line.empty() && is_ip_range(line)) ranges.push_back(std::move(line));
+      }
+      ifs.close();
+      std::filesystem::remove(tmp, ec);
+      if (!ranges.empty()) return ranges;
+    }
+    std::filesystem::remove(tmp, ec);
+  } catch (...) {
+    std::filesystem::remove(tmp, ec);
+  }
+
+  // Fallback: обычная загрузка в память
+  return extract_ip_ranges(http_get_url(page_url, progress));
 }
 
 // URL со всеми IP цели: готовая ссылка выгрузки, иначе конструируется из

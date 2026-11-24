@@ -1,12 +1,8 @@
 #include "suip_cache.h"
-
-// Boost.JSON в header-only режиме: реализация подключается ровно в одном
-// модуле проекта (здесь).
-#include <boost/json/src.hpp>
+#include "paths.h"
 
 #include <boost/json.hpp>
 
-#include <cstdlib>
 #include <fstream>
 #include <sstream>
 #include <system_error>
@@ -15,13 +11,7 @@
 namespace ipsuip {
 namespace {
 
-constexpr int kFormatVersion = 2;
-
-std::filesystem::path home_dir() {
-  if (const char *home = std::getenv("HOME"); home && *home)
-    return std::filesystem::path(home);
-  return std::filesystem::current_path();
-}
+constexpr int kFormatVersion = 3;
 
 boost::json::object target_to_json(const Target &t) {
   boost::json::object o;
@@ -57,9 +47,7 @@ bool target_from_json(const boost::json::value &v, Target &t) {
 } // namespace
 
 std::filesystem::path default_cache_path() {
-  if (const char *xdg = std::getenv("XDG_CONFIG_HOME"); xdg && *xdg)
-    return std::filesystem::path(xdg) / "suipbiz" / "data.json";
-  return home_dir() / ".config" / "suipbiz" / "data.json";
+  return paths::cache_dir();
 }
 
 NavCache::NavCache() : path_(default_cache_path()) { load(); }
@@ -164,6 +152,12 @@ bool NavCache::save() const {
     return false;
   }
   return true;
+}
+
+void NavCache::clear() {
+  pages_.clear();
+  std::error_code ec;
+  std::filesystem::remove(path_, ec);
 }
 
 } // namespace ipsuip
