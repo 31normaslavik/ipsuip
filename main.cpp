@@ -1,461 +1,33 @@
 /** Made by I'm Pancake **/
 
-// #include "choose_your_fate.h"
-#include "http_client_sync_ssl.h"
+#include "ip_convert.h"
+#include "ipsuip_tui.h"
+#include "suip_cache.h"
+#include "suip_model.h"
+
+#include <algorithm>
+#include <cctype>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <lexbor/dom/dom.h>
 #include <lexbor/html/html.h>
 #include <lexbor/html/interfaces/document.h>
-#include <lexbor/url/url.h>
-#include <string>
-#include <lexbor/html/html.h>
-#include <lexbor/dom/dom.h>
 #include <lexbor/html/serialize.h>
-#include <cctype>
-#include <cstring>
-#include <tuple>
-#include <unordered_map>
+#include <lexbor/url/url.h>
+#include <stdexcept>
+#include <string>
 #include <vector>
-#include <sstream>
 
 // ---- модель ------------------------------------------------------------
+// enum TargetLevel, struct Target, struct PageContent и объявления
+// parse_targets/parse_ip_ranges/fetch_page вынесены в suip_model.h.
 
-enum class TargetLevel { Continent, Country, Province, City };
-
-static const char *level_name(TargetLevel level) {
-  switch (level) {
-    case TargetLevel::Continent: return "continent";
-    case TargetLevel::Country:   return "country";
-    case TargetLevel::Province:  return "province";
-    case TargetLevel::City:      return "city";
-  }
-  return "unknown";
-}
-
-struct Target {
-  TargetLevel level = TargetLevel::Continent;
-  std::string code;                   // значение параметра уровня: EU, BY, Brest ...
-  std::string location;               // отображаемое название
-  std::string address;                // абсолютный URL страницы уровня
-  std::string all_ip_direct_download; // абсолютный URL выгрузки всех IP (может быть пустым)
-};
-
-// Результат разбора одной страницы: либо навигация по иерархии, либо IP-список.
-struct PageContent {
-  std::vector<Target> targets;
-  std::vector<std::string> ip_ranges;
-};
-
-// ---- вспомогательные --------------------------------------------------
-
-static std::string trim(const std::string& s) {
-    size_t b = s.find_first_not_of(" \t\r\n");
-    if (b == std::string::npos) return "";
-    size_t e = s.find_last_not_of(" \t\r\n");
-    return s.substr(b, e - b + 1);
-}
-
-static std::string node_text(lxb_dom_node_t* node) {
-    std::string out;
-    std::vector<lxb_dom_node_t*> stack{node};
-    while (!stack.empty()) {
-        lxb_dom_node_t* n = stack.back();
-        stack.pop_back();
-        if (n->type == LXB_DOM_NODE_TYPE_TEXT) {
-            auto* t = lxb_dom_interface_text(n);
-            out.append(reinterpret_cast<const char*>(t->char_data.data.data),
-                       t->char_data.data.length);
-        } else {
-            for (lxb_dom_node_t* c = n->first_child; c; c = c->next)
-                stack.push_back(c);
-        }
-    }
-    return out;
-}
-
-static std::string element_attr(lxb_dom_element_t* el, const char* name) {
-    size_t len = 0;
-    const lxb_char_t* v = lxb_dom_element_get_attribute(
-        el,
-        reinterpret_cast<const lxb_char_t*>(name),
-        std::strlen(name),
-        &len);
-    return v ? std::string(reinterpret_cast<const char*>(v), len) : std::string();
-}
-
-static void collect_anchors(lxb_dom_node_t* node,
-                            std::vector<lxb_dom_element_t*>& out) {
-    for (lxb_dom_node_t* c = node->first_child; c; c = c->next) {
-        if (c->type == LXB_DOM_NODE_TYPE_ELEMENT) {
-            auto* el = lxb_dom_interface_element(c);
-            size_t len = 0;
-            const lxb_char_t* tag = lxb_dom_element_local_name(el, &len);
-            if (tag && len == 1 && tag[0] == 'a') out.push_back(el);
-            collect_anchors(c, out);
-        }
-    }
-}
-
-// ---- вспомогательные для разбора ссылок --------------------------------
-
-static bool starts_with(const std::string& s, const std::string& prefix) {
-  return s.rfind(prefix, 0) == 0;
-}
-
-static bool ends_with(const std::string& s, const std::string& suffix) {
-  return s.size() >= suffix.size() &&
-         s.compare(s.size() - suffix.size(), suffix.size(), suffix) == 0;
-}
-
-// lexbor может отдавать href с HTML-сущностями (&amp;) — приводим к обычному виду
-static std::string normalize_href(const std::string& href) {
-  std::string out;
-  out.reserve(href.size());
-  for (size_t i = 0; i < href.size();) {
-    if (href.compare(i, 5, "&amp;") == 0) {
-      out += '&';
-      i += 5;
-    } else if (href.compare(i, 4, "&#38;") == 0) {
-      out += '&';
-      i += 4;
-    } else {
-      out += href[i++];
-    }
-  }
-  return out;
-}
-
-// отбрасывает схему, хост и путь, оставляя только query-строку
-static std::string query_only(const std::string& href) {
-  size_t q = href.find('?');
-  return q == std::string::npos ? std::string() : href.substr(q);
-}
-
-static bool has_param(const std::string& query, const char* key) {
-  const std::string k(key);
-  return query.find("&" + k + "=") != std::string::npos ||
-         starts_with(query, "?" + k + "=");
-}
-
-static std::string param_value(const std::string& query, const char* key) {
-  const std::string k(key);
-  size_t start;
-  size_t pos = query.find("&" + k + "=");
-  if (pos != std::string::npos)
-    start = pos + k.size() + 2;
-  else if (starts_with(query, "?" + k + "="))
-    start = k.size() + 2;
-  else
-    return {};
-
-  size_t end = query.find('&', start);
-  return query.substr(start,
-                      end == std::string::npos ? std::string::npos : end - start);
-}
-
-// %20 -> ' ', %28 -> '(' и т.п.
-static std::string url_decode(const std::string& s) {
-  std::string out;
-  out.reserve(s.size());
-  for (size_t i = 0; i < s.size(); ++i) {
-    if (s[i] == '%' && i + 2 < s.size() &&
-        std::isxdigit(static_cast<unsigned char>(s[i + 1])) &&
-        std::isxdigit(static_cast<unsigned char>(s[i + 2]))) {
-      out += static_cast<char>(std::stoi(s.substr(i + 1, 2), nullptr, 16));
-      i += 2;
-    } else if (s[i] == '+') {
-      out += ' ';
-    } else {
-      out += s[i];
-    }
-  }
-  return out;
-}
-
-// Уровень определяется самым «глубоким» параметром query-строки, поэтому
-// одна и та же функция разбирает страницы всех уровней:
-//   ?act=all-country-ip                                  — корень (пропускается)
-//   ?act=all-country-ip&continent=EU                     — континент
-//   ?act=all-country-ip&country=BY                       — страна
-//   ?act=all-country-ip&country=BY&province=Brest        — регион/провинция
-//   ?act=all-country-ip&country=BY&province=Brest&city=Brest — город
-static bool level_of_query(const std::string& query, TargetLevel& level,
-                           const char*& key) {
-  static const struct {
-    const char* name;
-    TargetLevel level;
-  } kLevels[] = {
-      {"city", TargetLevel::City},
-      {"province", TargetLevel::Province},
-      {"country", TargetLevel::Country},
-      {"continent", TargetLevel::Continent},
-  };
-
-  for (const auto& l : kLevels) {
-    if (has_param(query, l.name)) {
-      level = l.level;
-      key = l.name;
-      return true;
-    }
-  }
-  return false;
-}
-
-struct TargetSlot {
-  Target target;
-  int download_rank = 0; // 1 — &all-download, 2 — &all (предпочтительнее)
-};
-
-// Название локации берём только из «содержательных» ссылок suip.biz:
-//   <p>Browse <a>Europe</a> (or get ...)
-//   <p><a>Brest</a> city (town) all IP addresses</p>
-// Служебные ссылки вроде "(FOUR LEVELS UP)" названием не считаются.
-static std::string location_from_anchor(lxb_dom_element_t* el) {
-  auto* node = reinterpret_cast<lxb_dom_node_t*>(el);
-
-  std::string before = node->prev ? trim(node_text(node->prev)) : std::string();
-  std::string after  = node->next ? trim(node_text(node->next)) : std::string();
-
-  if (before.find("Browse") != std::string::npos ||
-      after.rfind("city (town)", 0) == 0)
-    return trim(node_text(node));
-
-  return {};
-}
-
-// ---- основная функция --------------------------------------------------
-
-// Разбирает страницу любого уровня и собирает все найденные цели.
-// Ссылки "?act=all-country-ip&..." дают address, парные "&all"/"&all-download"
-// дают all_ip_direct_download.
-std::vector<Target> parse_targets(const std::string& html,
-                                  const std::string& base_url = "https://suip.biz/") {
-  std::vector<TargetSlot> slots;
-  std::unordered_map<std::string, size_t> index; // query без &all -> индекс в slots
-
-  lxb_html_document_t* doc = lxb_html_document_create();
-  if (!doc) return {};
-
-  lxb_status_t st = lxb_html_document_parse(
-      doc, reinterpret_cast<const lxb_char_t*>(html.data()), html.size());
-  if (st != LXB_STATUS_OK) {
-    lxb_html_document_destroy(doc);
-    return {};
-  }
-
-  std::vector<lxb_dom_element_t*> anchors;
-  collect_anchors(reinterpret_cast<lxb_dom_node_t*>(doc), anchors);
-
-  for (auto* a : anchors) {
-    std::string href = normalize_href(element_attr(a, "href"));
-    if (href.empty()) continue;
-
-    std::string query = query_only(href);
-    if (!starts_with(query, "?act=all-country-ip")) continue;
-
-    // Отделяем «скачать всё» от обычной навигации по иерархии.
-    std::string base = query;
-    bool is_all = false;
-    bool is_download = false;
-    if (ends_with(base, "&all-download")) {
-      base.resize(base.size() - std::strlen("&all-download"));
-      is_download = true;
-    } else if (ends_with(base, "&all")) {
-      base.resize(base.size() - std::strlen("&all"));
-      is_all = true;
-    }
-
-    TargetLevel level = TargetLevel::Continent;
-    const char* key = nullptr;
-    // Корневая ссылка "?act=all-country-ip" уровня не содержит — пропускаем.
-    if (!level_of_query(base, level, key)) continue;
-
-    std::string code = url_decode(param_value(base, key));
-    if (code.empty()) continue;
-
-    auto it = index.find(base);
-    if (it == index.end()) {
-      TargetSlot slot;
-      slot.target.level = level;
-      slot.target.code = code;
-      slot.target.address = base_url + base;
-      slots.push_back(std::move(slot));
-      it = index.emplace(base, slots.size() - 1).first;
-    }
-
-    TargetSlot& slot = slots[it->second];
-
-    if (!is_all && !is_download) {
-      std::string text = location_from_anchor(a);
-      if (!text.empty()) slot.target.location = text;
-      continue;
-    }
-
-    int rank = is_all ? 2 : 1;
-    if (rank > slot.download_rank) {
-      slot.download_rank = rank;
-      slot.target.all_ip_direct_download =
-          starts_with(href, "http") ? href : base_url + href;
-    }
-  }
-
-  lxb_html_document_destroy(doc);
-
-  std::vector<Target> targets;
-  targets.reserve(slots.size());
-  for (auto& slot : slots) targets.push_back(std::move(slot.target));
-  return targets;
-}
-
-// ---- разбор списка IP-диапазонов ---------------------------------------
-
-static bool is_ipv4(const std::string& s) {
-  int parts = 0;
-  size_t start = 0;
-  while (start <= s.size()) {
-    size_t end = s.find('.', start);
-    if (end == std::string::npos) end = s.size();
-
-    std::string part = s.substr(start, end - start);
-    if (part.empty() || part.size() > 3) return false;
-    for (char c : part)
-      if (!std::isdigit(static_cast<unsigned char>(c))) return false;
-    if (std::stoi(part) > 255) return false;
-
-    ++parts;
-    if (end == s.size()) break;
-    start = end + 1;
-  }
-  return parts == 4;
-}
-
-static bool is_ipv6(const std::string& s) {
-  if (s.find(':') == std::string::npos) return false;
-  for (char c : s)
-    if (!std::isxdigit(static_cast<unsigned char>(c)) && c != ':') return false;
-
-  size_t double_colon = s.find("::");
-  if (double_colon != std::string::npos &&
-      s.find("::", double_colon + 1) != std::string::npos)
-    return false;
-
-  int groups = 0;
-  size_t start = 0;
-  while (start <= s.size()) {
-    size_t end = s.find(':', start);
-    if (end == std::string::npos) end = s.size();
-
-    std::string group = s.substr(start, end - start);
-    if (group.size() > 4) return false;
-    if (!group.empty()) ++groups;
-
-    if (end == s.size()) break;
-    start = end + 1;
-  }
-
-  return double_colon != std::string::npos ? groups <= 7 : groups == 8;
-}
-
-// Строка вида "192.168.1.0-192.168.255.255" или "2a03:d000:8000::-2a03:d000:8000:ffff:ffff:ffff:ffff:ffff".
-static bool is_ip_range(const std::string& s) {
-  size_t dash = s.find('-');
-  if (dash == std::string::npos || s.find('-', dash + 1) != std::string::npos)
-    return false;
-
-  std::string first = s.substr(0, dash);
-  std::string last = s.substr(dash + 1);
-  return (is_ipv4(first) && is_ipv4(last)) || (is_ipv6(first) && is_ipv6(last));
-}
-
-static void collect_elements_by_tag(lxb_dom_node_t* node, const char* name,
-                                    std::vector<lxb_dom_element_t*>& out) {
-  const size_t name_len = std::strlen(name);
-  for (lxb_dom_node_t* c = node->first_child; c; c = c->next) {
-    if (c->type != LXB_DOM_NODE_TYPE_ELEMENT) continue;
-
-    auto* el = lxb_dom_interface_element(c);
-    size_t len = 0;
-    const lxb_char_t* tag = lxb_dom_element_local_name(el, &len);
-    if (tag && len == name_len &&
-        std::strncmp(reinterpret_cast<const char*>(tag), name, name_len) == 0)
-      out.push_back(el);
-
-    collect_elements_by_tag(c, name, out);
-  }
-}
-
-// Страница с IP-адресами содержит <pre>, в котором каждая строка — диапазон.
-// Возвращает только валидные диапазоны, без тегов и служебного текста.
-std::vector<std::string> parse_ip_ranges(const std::string& html) {
-  std::vector<std::string> ranges;
-
-  lxb_html_document_t* doc = lxb_html_document_create();
-  if (!doc) return ranges;
-
-  lxb_status_t st = lxb_html_document_parse(
-      doc, reinterpret_cast<const lxb_char_t*>(html.data()), html.size());
-  if (st != LXB_STATUS_OK) {
-    lxb_html_document_destroy(doc);
-    return ranges;
-  }
-
-  std::vector<lxb_dom_element_t*> pres;
-  collect_elements_by_tag(reinterpret_cast<lxb_dom_node_t*>(doc), "pre", pres);
-
-  for (auto* pre : pres) {
-    std::string text = node_text(reinterpret_cast<lxb_dom_node_t*>(pre));
-    std::istringstream ss(text);
-    for (std::string line; std::getline(ss, line);) {
-      line = trim(line);
-      if (!line.empty() && is_ip_range(line)) ranges.push_back(std::move(line));
-    }
-  }
-
-  lxb_html_document_destroy(doc);
-  return ranges;
-}
-
-// ---- сеть --------------------------------------------------------------
-
-// Скачивает страницу и разбирает её (boost/beast + lexbor).
-PageContent fetch_page(const std::string& page_url) {
-  const std::string scheme = "https://";
-  if (!starts_with(page_url, scheme))
-    throw std::runtime_error("Only https:// URLs are supported: " + page_url);
-
-  size_t host_end = page_url.find('/', scheme.size());
-  std::string host = page_url.substr(
-      scheme.size(),
-      host_end == std::string::npos ? std::string::npos : host_end - scheme.size());
-  if (host.empty())
-    throw std::runtime_error("Cannot extract host from URL: " + page_url);
-
-  std::string target = host_end == std::string::npos ? "/" : page_url.substr(host_end);
-  const std::string html = ipsuip::get(host, target);
-  
-  if(!html.empty()){
-    std::filesystem::path path_html{"last_html.html"};
-    std::ofstream ofs(path_html);
-    if (!ofs)
-      throw std::runtime_error("File creation error: " + path_html.string());
-    else {
-      std::istringstream ss{html};
-      for(std::string line; std::getline(ss, line);){
-        ofs << line << "\n";
-      }
-   }
-    ofs.close();
-  }
-
-  PageContent page;
-  page.targets = parse_targets(html, scheme + host + "/");
-  page.ip_ranges = parse_ip_ranges(html);
-  return page;
-}
-
-
+// ---- сохранение --------------------------------------------------------
 
 void save_to_file(const std::string &data_raw_html,
                   const std::string &file_name) {
@@ -591,50 +163,315 @@ int lexbor_test(const std::string &str) {
   return EXIT_SUCCESS;
 }
 
+// ---- консольный режим --------------------------------------------------
+
+namespace {
+
+constexpr const char *kRootUrl = "https://suip.biz/?act=all-country-ip";
+
+std::string to_lower(std::string s) {
+  for (char &c : s)
+    c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  return s;
+}
+
+std::string target_label(const Target &t) {
+  return t.location.empty() ? t.code : t.location;
+}
+
+// Печатает цели в формате "Название -- КОД", отсортированные по названию.
+// Если задан filter_level, печатаются только цели этого уровня.
+size_t print_targets(const std::vector<Target> &targets,
+                     const TargetLevel *filter_level) {
+  std::vector<const Target *> items;
+  for (const auto &t : targets)
+    if (!filter_level || t.level == *filter_level) items.push_back(&t);
+
+  std::sort(items.begin(), items.end(), [](const Target *a, const Target *b) {
+    return to_lower(target_label(*a)) < to_lower(target_label(*b));
+  });
+
+  for (const Target *t : items)
+    std::cout << target_label(*t) << " -- " << t->code << "\n";
+  return items.size();
+}
+
+// Ищет цель нужного уровня по коду или названию (без учёта регистра).
+const Target *find_target(const std::vector<Target> &targets, TargetLevel level,
+                          const std::string &name) {
+  const std::string needle = to_lower(name);
+  for (const auto &t : targets)
+    if (t.level == level && to_lower(t.code) == needle) return &t;
+  for (const auto &t : targets)
+    if (t.level == level && to_lower(t.location) == needle) return &t;
+  return nullptr;
+}
+
+struct LoadedPage {
+  std::vector<Target> targets;
+  std::vector<std::string> ranges;
+};
+
+// Загружает страницу. Навигационные страницы берутся из кэша (кроме
+// --refresh), страницы с IP-диапазонами запрашиваются заново и не кэшируются.
+LoadedPage load_page(const std::string &url, ipsuip::NavCache &cache,
+                     bool refresh) {
+  if (!refresh)
+    if (const std::vector<Target> *cached = cache.find(url))
+      return LoadedPage{*cached, {}};
+
+  PageContent page = fetch_page(url);
+  // Страница с IP-диапазонами: всегда заново и никогда в кэш.
+  if (!page.ip_ranges.empty()) return LoadedPage{{}, std::move(page.ip_ranges)};
+  if (page.targets.empty()) return LoadedPage{{}, {}};
+
+  cache.store(url, page.targets);
+  if (!cache.save())
+    std::cerr << "Предупреждение: не удалось записать кэш " << cache.path()
+              << "\n";
+  return LoadedPage{std::move(page.targets), {}};
+}
+
+bool write_lines(const std::filesystem::path &path,
+                 const std::vector<std::string> &lines) {
+  std::ofstream ofs(path);
+  if (!ofs) return false;
+  for (const auto &line : lines) ofs << line << '\n';
+  ofs.flush();
+  return static_cast<bool>(ofs);
+}
+
+// Скачивает все IP цели и пишет два файла: диапазоны и CIDR.
+// known — уже загруженные диапазоны (страница города), чтобы не качать дважды.
+int save_all_ips(const Target &target, const std::vector<std::string> &known,
+                 const std::string &output_dir) {
+  std::vector<std::string> ranges = known;
+  if (ranges.empty()) ranges = fetch_ip_ranges(all_ip_url(target));
+
+  if (ranges.empty()) {
+    std::cerr << "Диапазоны IP не найдены: " << target_label(target) << "\n";
+    return 1;
+  }
+
+  std::error_code ec;
+  const std::filesystem::path dir(output_dir);
+  std::filesystem::create_directories(dir, ec);
+  if (ec) {
+    std::cerr << "Не удалось создать каталог " << dir << ": " << ec.message()
+              << "\n";
+    return 1;
+  }
+
+  const std::string base = ipsuip::sanitize_filename(target_label(target));
+  const std::filesystem::path ranges_path = dir / (base + ".ranges.txt");
+  const std::filesystem::path cidr_path = dir / (base + ".cidr.txt");
+  const std::vector<std::string> cidrs = ipsuip::ranges_to_cidr(ranges);
+
+  if (!write_lines(ranges_path, ranges) || !write_lines(cidr_path, cidrs)) {
+    std::cerr << "Ошибка записи файлов в " << dir << "\n";
+    return 1;
+  }
+
+  std::cout << "Диапазоны IP (" << ranges.size()
+            << "): " << ranges_path.string() << "\n";
+  std::cout << "CIDR (" << cidrs.size() << "): " << cidr_path.string() << "\n";
+  return 0;
+}
+
+struct LevelArg {
+  bool given = false;
+  std::string value; // пусто — вывести список этого уровня
+};
+
+struct Options {
+  bool tui = false;
+  bool help = false;
+  bool refresh = false;
+  std::string output_dir;
+  std::string url;
+  LevelArg continent, country, province, city;
+};
+
+void print_usage(std::ostream &os) {
+  os << "Списки IP-адресов suip.biz\n"
+        "\n"
+        "Использование:\n"
+        "  ipsuip_develop --tui\n"
+        "      интерактивный браузер иерархии\n"
+        "  ipsuip_develop --mainland\n"
+        "      список континентов\n"
+        "  ipsuip_develop --mainland EU --country\n"
+        "      список стран континента\n"
+        "  ipsuip_develop --mainland EU --country RU --province\n"
+        "      список регионов страны\n"
+        "  ipsuip_develop --mainland EU --country RU --province Chelyabinsk --city\n"
+        "      список городов региона\n"
+        "  ipsuip_develop --mainland EU --country RU --province Chelyabinsk --city Kartaly\n"
+        "      диапазоны IP цели\n"
+        "  ipsuip_develop ... --output DIR\n"
+        "      сохранить диапазоны (RANGE и CIDR) в каталог DIR\n"
+        "\n"
+        "Флаг уровня без значения выводит список этого уровня, со значением —\n"
+        "выбирает цель по коду или названию. --refresh игнорирует кэш\n"
+        "навигационных страниц. --help показывает эту справку.\n"
+        "\n"
+        "Кэш: $XDG_CONFIG_HOME/suipbiz/data.json (по умолчанию\n"
+        "~/.config/suipbiz/data.json). Страницы с IP-адресами не кэшируются.\n";
+}
+
+int run_console(const Options &opt) {
+  ipsuip::NavCache cache;
+  LoadedPage page = load_page(kRootUrl, cache, opt.refresh);
+
+  const struct {
+    TargetLevel level;
+    const LevelArg *arg;
+  } steps[] = {
+      {TargetLevel::Continent, &opt.continent},
+      {TargetLevel::Country, &opt.country},
+      {TargetLevel::Province, &opt.province},
+      {TargetLevel::City, &opt.city},
+  };
+
+  Target selected;
+  bool have_selected = false;
+
+  for (const auto &step : steps) {
+    if (!step.arg->given) continue;
+
+    if (!page.ranges.empty()) {
+      std::cerr << "У цели " << target_label(selected)
+                << " нет вложенных уровней\n";
+      return 1;
+    }
+
+    if (step.arg->value.empty()) {
+      const size_t count = print_targets(page.targets, &step.level);
+      if (count == 0) {
+        std::cerr << "Нет элементов уровня " << level_name(step.level) << "\n";
+        return 1;
+      }
+      return 0;
+    }
+
+    const Target *found = find_target(page.targets, step.level, step.arg->value);
+    if (!found) {
+      std::cerr << "Не найдено: " << level_name(step.level) << " \""
+                << step.arg->value << "\""
+                << (have_selected ? "" : " (укажите родительские уровни)")
+                << "\n";
+      return 1;
+    }
+
+    selected = *found;
+    have_selected = true;
+    page = load_page(selected.address, cache, opt.refresh);
+  }
+
+  if (!opt.output_dir.empty()) {
+    if (!have_selected) {
+      std::cerr << "--output требует выбранной цели\n";
+      return 1;
+    }
+    // Для города диапазоны уже на его странице, для остальных уровней —
+    // отдельная выгрузка всех IP.
+    return save_all_ips(selected, page.ranges, opt.output_dir);
+  }
+
+  if (!page.ranges.empty()) {
+    for (const auto &range : page.ranges) std::cout << range << "\n";
+    return 0;
+  }
+
+  if (print_targets(page.targets, nullptr) == 0) {
+    std::cerr << "На странице нет элементов\n";
+    return 1;
+  }
+  return 0;
+}
+
+bool parse_args(int argc, char **argv, Options &opt, std::string &error) {
+  for (int i = 1; i < argc; ++i) {
+    const std::string arg = argv[i];
+
+    const auto take_value = [&](LevelArg &dst) {
+      dst.given = true;
+      if (i + 1 < argc && argv[i + 1][0] != '-') dst.value = argv[++i];
+    };
+
+    if (arg == "--help" || arg == "-h")
+      opt.help = true;
+    else if (arg == "--tui")
+      opt.tui = true;
+    else if (arg == "--refresh")
+      opt.refresh = true;
+    else if (arg == "--mainland" || arg == "--continent")
+      take_value(opt.continent);
+    else if (arg == "--country")
+      take_value(opt.country);
+    else if (arg == "--province")
+      take_value(opt.province);
+    else if (arg == "--city")
+      take_value(opt.city);
+    else if (arg == "--output") {
+      if (i + 1 >= argc) {
+        error = "--output требует каталог";
+        return false;
+      }
+      opt.output_dir = argv[++i];
+    } else if (arg.rfind("--", 0) == 0) {
+      error = "Неизвестный флаг: " + arg;
+      return false;
+    } else {
+      opt.url = arg;
+    }
+  }
+  return true;
+}
+
+} // namespace
+
 int main(int argc, char **argv) {
+  Options opt;
+  std::string error;
+  if (!parse_args(argc, argv, opt, error)) {
+    std::cerr << error << "\n\n";
+    print_usage(std::cerr);
+    return 1;
+  }
+
+  if (opt.help) {
+    print_usage(std::cout);
+    return 0;
+  }
+
   try {
-    PageContent page;
+    if (opt.tui)
+      // Интерактивный режим: по умолчанию начинаем с корня иерархии.
+      return ipsuip::run_tui(opt.url.empty() ? kRootUrl : opt.url);
 
-    if (argc == 2) {
-      // Режим сети: любая страница иерархии, например
-      // ./ipsuip_develop "https://suip.biz/?act=all-country-ip&country=BY"
-      page = fetch_page(argv[1]);
-    } else {
-      // Оффлайн-режим: разбор локального файла из текущего каталога.
-      std::cout << std::filesystem::current_path() << "\n";
-      std::filesystem::path path("CountriesEurope.html");
+    const bool console = opt.continent.given || opt.country.given ||
+                         opt.province.given || opt.city.given;
 
-      if (!std::filesystem::exists(path))
-        throw std::runtime_error("File not found: " + path.string());
-
-      std::ifstream ifs(path);
-      if (!ifs)
-        throw std::runtime_error("File open error: " + path.filename().string());
-
-      std::string all_file;
-      for (std::string temp_f; std::getline(ifs, temp_f);) {
-        all_file += temp_f;
-        all_file.append("\n");
-      }
-
-      page.targets = parse_targets(all_file);
-      page.ip_ranges = parse_ip_ranges(all_file);
+    if (opt.url.empty() && !console) {
+      print_usage(std::cerr);
+      return 1;
     }
 
-    // Страница с IP-адресами: выводим только сами диапазоны.
-    if (!page.ip_ranges.empty()) {
-      for (const auto& range : page.ip_ranges) std::cout << range << "\n";
-    } else {
-      for (const auto& t : page.targets) {
-        std::cout << "[" << level_name(t.level) << "]"
-                  << " CODE=" << t.code
-                  << " | Location=" << t.location
-                  << " | Adress=" << t.address
-                  << " | ALL_IP_Direct_Download=" << t.all_ip_direct_download << "\n";
-      }
+    if (!opt.url.empty()) {
+      // Прямой URL страницы: печать её содержимого.
+      const PageContent page = fetch_page(opt.url);
+      if (!page.ip_ranges.empty())
+        for (const auto &range : page.ip_ranges) std::cout << range << "\n";
+      else
+        print_targets(page.targets, nullptr);
+      return 0;
     }
+
+    return run_console(opt);
 
   } catch (std::exception &e) {
     std::cerr << e.what() << std::endl;
+    return 1;
   }
 }

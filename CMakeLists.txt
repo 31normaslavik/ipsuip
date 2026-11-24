@@ -5,18 +5,24 @@ project(ipsuip_develop VERSION 0.1 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-set(SOURCES main.cpp)
-# set(SOURCES fle.cpp)
-# set(SOURCES fle2.cpp)
-# set(SOURCES fle3.cpp)
-
 find_package(lexbor REQUIRED)
 # target_link_libraries(your_target PRIVATE liblexbor)
 
 add_subdirectory(http_client)
 
-add_executable(ipsuip_develop ${SOURCES} ${HEADERS})
-target_link_libraries(ipsuip_develop PRIVATE lexbor http_client_sync_ssl -lpthread -lm -static-libgcc -static-libstdc++)
+# Общая модель suip.biz и JSON-кэш навигационных страниц.
+# Используется консольным режимом и TUI.
+add_library(suip_core STATIC
+    suip_model.cpp suip_model.h
+    suip_cache.cpp suip_cache.h
+)
+target_include_directories(suip_core PUBLIC ${PROJECT_SOURCE_DIR})
+target_link_libraries(suip_core PUBLIC lexbor http_client_sync_ssl)
+
+add_subdirectory(tui)
+
+add_executable(ipsuip_develop main.cpp)
+target_link_libraries(ipsuip_develop PRIVATE suip_core ipsuip_tui -lpthread -lm -static-libgcc -static-libstdc++)
 
 # Install the target
 install(

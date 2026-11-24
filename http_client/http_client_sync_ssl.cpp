@@ -69,7 +69,7 @@ std::string ipsuip::get(const std::string &host, const std::string &target)
     system::error_code ecr;
     std::size_t bytes = beast::http::read(stream, buffer, parser, ecr);
 
-    std::cout << "bytes: " << bytes << std::endl;
+    std::cerr << "bytes: " << bytes << std::endl;
     // std::cout << "Download " << ipsuip::HumanReadable(bytes) << "\n";
 
     if (ecr) {
