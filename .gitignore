@@ -1,4 +1,59 @@
-.vscode
-.cache
-.qtcreator
-build
+# IDE / local tool state
+.vscode/
+.cache/
+.qtcreator/
+.kilo/
+.idea/
+*.user
+*.swp
+
+# Build directories and generated CMake files
+/build/
+/build-*/
+/cmake-build-*/
+/out/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+compile_commands.json
+install_manifest.txt
+build.ninja
+.ninja_deps
+.ninja_log
+Makefile
+CPackConfig.cmake
+CPackSourceConfig.cmake
+_CPack_Packages/
+
+# Build outputs
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.ilk
+*.exp
+
+# Packages
+*.tar.gz
+*.tgz
+*.deb
+*.rpm
+*.zip
+*.7z
+
+# Application output / debug dumps
+*.ranges.txt
+*.cidr.txt
+last_html.html
+data.json
+
+# OS
+.DS_Store
+Thumbs.db
