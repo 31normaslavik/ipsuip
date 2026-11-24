@@ -9,6 +9,7 @@ project(ipsuip VERSION 0.1.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 include(FetchContent)
+include(ExternalProject)
 include(CheckSymbolExists)
 find_package(Threads REQUIRED)
 
@@ -17,9 +18,11 @@ find_package(Threads REQUIRED)
 # ---------------------------------------------------------------------------
 
 option(IPSUIP_STATIC "Статически линковать рантайм GCC и зависимости проекта" ON)
+option(IPSUIP_BUNDLED_OPENSSL "Собрать OpenSSL вместе с проектом (shared)" OFF)
 
 set(IPSUIP_BOOST_VERSION "1.92.0" CACHE STRING "Версия Boost (модульный CMake-архив)")
 set(IPSUIP_LEXBOR_VERSION "3.0.1" CACHE STRING "Версия lexbor")
+set(IPSUIP_OPENSSL_VERSION "3.6.5" CACHE STRING "Версия OpenSSL для IPSUIP_BUNDLED_OPENSSL")
 set(IPSUIP_PDCURSES_VERSION "4.5.4" CACHE STRING "Версия PDCursesMod")
 
 set(CMAKE_CXX_STANDARD 20)
@@ -51,21 +54,104 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
-# OpenSSL: только системная разделяемая библиотека (НЕ статическая).
-# libssl.so / libcrypto.so нужны и при сборке (заголовки + .so), и в рантайме.
-# Проверяем сразу, до загрузки FetchContent-зависимостей, чтобы отсутствие
-# OpenSSL приводило к понятной ошибке конфигурации.
+# OpenSSL. По умолчанию системная shared-библиотека. При IPSUIP_BUNDLED_OPENSSL
+# собирается shared OpenSSL из исходников. Статический OpenSSL не используется.
 # ---------------------------------------------------------------------------
 
-set(OPENSSL_USE_STATIC_LIBS FALSE)
-set(OPENSSL_MSVC_STATIC_RT FALSE)
-find_package(OpenSSL 1.1.1 REQUIRED COMPONENTS SSL Crypto)
-message(STATUS "OpenSSL: ${OPENSSL_VERSION} (shared; required at runtime)")
+if(IPSUIP_BUNDLED_OPENSSL)
+  include(ProcessorCount)
+  ProcessorCount(IPSUIP_JOBS)
+  if(IPSUIP_JOBS EQUAL 0)
+    set(IPSUIP_JOBS 2)
+  endif()
 
-add_library(ipsuip_ssl INTERFACE)
-target_link_libraries(ipsuip_ssl INTERFACE
-  OpenSSL::SSL OpenSSL::Crypto ${IPSUIP_PLATFORM_LIBS}
-)
+  set(SSL_PREFIX "${CMAKE_BINARY_DIR}/third_party/openssl")
+  set(SSL_SRC "${CMAKE_BINARY_DIR}/third_party/openssl-src")
+  set(SSL_LIBDIR "${SSL_PREFIX}/lib")
+
+  if(MSVC)
+    set(SSL_LIBSSL "${SSL_LIBDIR}/libssl.lib")
+    set(SSL_LIBCRYPTO "${SSL_LIBDIR}/libcrypto.lib")
+    set(SSL_CONFIGURE perl ${SSL_SRC}/Configure VC-WIN64A shared no-tests no-docs
+      --prefix=${SSL_PREFIX} --libdir=lib --openssldir=${SSL_PREFIX}/ssl)
+    set(SSL_BUILD nmake)
+    set(SSL_INSTALL nmake install_sw)
+  elseif(WIN32)
+    set(SSL_LIBSSL "${SSL_LIBDIR}/libssl.dll.a")
+    set(SSL_LIBCRYPTO "${SSL_LIBDIR}/libcrypto.dll.a")
+    if(CMAKE_C_COMPILER MATCHES "x86_64")
+      set(SSL_TARGET mingw64)
+    else()
+      set(SSL_TARGET mingw)
+    endif()
+    string(REGEX REPLACE "gcc$" "" SSL_CROSS "${CMAKE_C_COMPILER}")
+    set(SSL_CONFIGURE perl ${SSL_SRC}/Configure ${SSL_TARGET} shared no-tests no-docs
+      --cross-compile-prefix=${SSL_CROSS} --prefix=${SSL_PREFIX} --libdir=lib
+      --openssldir=${SSL_PREFIX}/ssl)
+    find_program(IPSUIP_HOST_MAKE NAMES make gmake REQUIRED)
+    set(SSL_BUILD ${IPSUIP_HOST_MAKE} -j${IPSUIP_JOBS} build_sw)
+    set(SSL_INSTALL ${IPSUIP_HOST_MAKE} install_sw)
+  else()
+    set(SSL_LIBSSL "${SSL_LIBDIR}/libssl.so")
+    set(SSL_LIBCRYPTO "${SSL_LIBDIR}/libcrypto.so")
+    set(SSL_CONFIGURE ${SSL_SRC}/config shared no-tests no-docs
+      --prefix=${SSL_PREFIX} --libdir=lib --openssldir=${SSL_PREFIX}/ssl)
+    find_program(IPSUIP_HOST_MAKE NAMES make gmake REQUIRED)
+    set(SSL_BUILD ${IPSUIP_HOST_MAKE} -j${IPSUIP_JOBS} build_sw)
+    set(SSL_INSTALL ${IPSUIP_HOST_MAKE} install_sw)
+  endif()
+
+  # Импортированная цель проверяет каталог заголовков на этапе генерации.
+  file(MAKE_DIRECTORY "${SSL_PREFIX}/include")
+
+  ExternalProject_Add(ipsuip_openssl_ep
+    URL "https://github.com/openssl/openssl/releases/download/openssl-${IPSUIP_OPENSSL_VERSION}/openssl-${IPSUIP_OPENSSL_VERSION}.tar.gz"
+    DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+    DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/third_party/downloads"
+    SOURCE_DIR "${SSL_SRC}"
+    BUILD_IN_SOURCE TRUE
+    CONFIGURE_COMMAND ${SSL_CONFIGURE}
+    BUILD_COMMAND ${SSL_BUILD}
+    INSTALL_COMMAND ${SSL_INSTALL}
+    BUILD_BYPRODUCTS "${SSL_LIBSSL}" "${SSL_LIBCRYPTO}"
+  )
+
+  add_library(ipsuip_ssl UNKNOWN IMPORTED GLOBAL)
+  set_target_properties(ipsuip_ssl PROPERTIES
+    IMPORTED_LOCATION "${SSL_LIBSSL}"
+    INTERFACE_INCLUDE_DIRECTORIES "${SSL_PREFIX}/include"
+    INTERFACE_LINK_LIBRARIES "${SSL_LIBCRYPTO};${IPSUIP_PLATFORM_LIBS};Threads::Threads"
+  )
+  add_dependencies(ipsuip_ssl ipsuip_openssl_ep)
+
+  if(WIN32)
+    install(DIRECTORY "${SSL_PREFIX}/bin/"
+      DESTINATION "${CMAKE_INSTALL_BINDIR}"
+      FILES_MATCHING PATTERN "*.dll"
+    )
+  else()
+    # Исполняемый файл ищет библиотеки рядом: bin/ -> ../lib/.
+    set(CMAKE_BUILD_RPATH "${SSL_LIBDIR}")
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../${CMAKE_INSTALL_LIBDIR}")
+    set(CMAKE_INSTALL_RPATH_USE_LINK_PATH TRUE)
+    install(DIRECTORY "${SSL_PREFIX}/lib/"
+      DESTINATION "${CMAKE_INSTALL_LIBDIR}"
+      FILES_MATCHING PATTERN "libssl.so*" PATTERN "libcrypto.so*"
+    )
+  endif()
+
+  message(STATUS "OpenSSL: bundled shared ${IPSUIP_OPENSSL_VERSION} (входит в пакет)")
+else()
+  set(OPENSSL_USE_STATIC_LIBS FALSE)
+  set(OPENSSL_MSVC_STATIC_RT FALSE)
+  find_package(OpenSSL 1.1.1 REQUIRED COMPONENTS SSL Crypto)
+  message(STATUS "OpenSSL: ${OPENSSL_VERSION} (system shared; required at runtime)")
+
+  add_library(ipsuip_ssl INTERFACE)
+  target_link_libraries(ipsuip_ssl INTERFACE
+    OpenSSL::SSL OpenSSL::Crypto ${IPSUIP_PLATFORM_LIBS}
+  )
+endif()
 
 # ---------------------------------------------------------------------------
 # lexbor (FetchContent, только статическая библиотека)
@@ -226,9 +312,20 @@ else()
   set(CPACK_DEBIAN_PACKAGE_MAINTAINER "ipsuip maintainers")
   set(CPACK_DEBIAN_PACKAGE_SECTION "utils")
   set(CPACK_DEBIAN_PACKAGE_PRIORITY "optional")
-  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-  # OpenSSL линкуется динамически — пакету нужна системная libssl.
-  set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.28), libssl3 | libssl3t64")
+  if(IPSUIP_BUNDLED_OPENSSL)
+    # OpenSSL уже лежит в пакете, внешняя зависимость не нужна.
+    set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+    set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.28)")
+  else()
+    # На Debian/Ubuntu зависимости лучше вычислить автоматически.
+    find_program(IPSUIP_DPKG_SHLIBDEPS NAMES dpkg-shlibdeps)
+    if(IPSUIP_DPKG_SHLIBDEPS)
+      set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS ON)
+    else()
+      set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+      set(CPACK_DEBIAN_PACKAGE_DEPENDS "libc6 (>= 2.28), libssl3 | libssl3t64")
+    endif()
+  endif()
 endif()
 
 include(CPack)

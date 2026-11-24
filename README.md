@@ -17,19 +17,36 @@
 
 ## Зависимости
 
-Для сборки нужны компилятор C++20, CMake 3.28+, Ninja или Make и OpenSSL
-с заголовками. `lexbor`, `Boost` и `PDCursesMod` CMake загрузит и соберёт сам.
+По умолчанию для сборки нужны компилятор C++20, CMake 3.28+, Ninja или Make
+и OpenSSL с заголовками. `lexbor`, `Boost` и `PDCursesMod` CMake загрузит и
+соберёт сам.
 
-OpenSSL используется как системная библиотека:
+По умолчанию OpenSSL используется как системная библиотека:
 
 - для сборки нужны заголовки: в Arch — пакет `openssl`, в Debian/Ubuntu —
   `libssl-dev`;
 - для запуска нужны `libssl`/`libcrypto`: в Arch — `openssl`, в Debian/Ubuntu —
   `libssl3` или `libssl3t64`, в Windows — DLL в `PATH` или рядом с
   `ipsuip.exe`;
-- готовые пакеты не включают OpenSSL: зависимость ставит менеджер пакетов.
+- в стандартной сборке пакеты не включают OpenSSL: зависимость ставит
+  менеджер пакетов.
 
 Проверить после сборки: `ldd ./build/ipsuip | grep -E 'ssl|crypto'`.
+
+### OpenSSL вместе с проектом
+
+Для Windows, кросс-сборки или самодостаточного архива можно собрать
+разделяемый OpenSSL из исходников:
+
+```bash
+cmake -S . -B build -DIPSUIP_BUNDLED_OPENSSL=ON
+cmake --build build
+```
+
+Статический OpenSSL не используется. На Linux `libssl.so`/`libcrypto.so`
+кладутся в `lib/` рядом с бинарником, на Windows DLL — в `bin/`; они попадают
+в пакеты CPack. Такая сборка дольше и дополнительно требует Perl, Make,
+а на Windows — NASM.
 
 ## Сборка и установка
 
@@ -49,8 +66,9 @@ sudo cmake --install build --prefix /usr/local
 
 ### Windows
 
-Нужен OpenSSL SDK с заголовками и библиотеками; DLL должны лежать рядом с
-`ipsuip.exe` или быть в `PATH`.
+По умолчанию нужен OpenSSL SDK с заголовками и библиотеками; DLL должны лежать
+рядом с `ipsuip.exe` или быть в `PATH`. Для самодостаточной сборки добавьте
+`-DIPSUIP_BUNDLED_OPENSSL=ON` — тогда DLL попадут в пакет.
 
 MSVC:
 
@@ -68,8 +86,9 @@ cmake -S . -B build-mingw -G Ninja \
 cmake --build build-mingw
 ```
 
-Для кросс-сборки нужен OpenSSL для mingw-w64 (в Arch — `mingw-w64-openssl`
-из AUR).
+Для кросс-сборки со системным OpenSSL нужен OpenSSL для mingw-w64 (в Arch —
+`mingw-w64-openssl` из AUR). Вариант с `-DIPSUIP_BUNDLED_OPENSSL=ON` собирает
+OpenSSL вместе с проектом и работает без системного mingw-OpenSSL.
 
 ## Пакеты
 
@@ -82,8 +101,9 @@ cpack -G NSIS
 ```
 
 На Linux создаются TGZ и DEB, на Windows — ZIP и NSIS. В пакет входят
-`ipsuip` и `README.md`; OpenSSL ставится отдельно. Для Arch Linux есть
-`PKGBUILD`: `makepkg -si`.
+`ipsuip` и `README.md`. Со системным OpenSSL зависимости объявляются в DEB,
+с `IPSUIP_BUNDLED_OPENSSL=ON` библиотеки кладутся прямо в пакет. Для Arch Linux
+есть `PKGBUILD`: `makepkg -si`.
 
 ## Использование
 

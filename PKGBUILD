@@ -21,7 +21,8 @@ build() {
   cmake -S "${src}" -B "${srcdir}/build" -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
     -DCMAKE_INSTALL_PREFIX=/usr \
-    -DIPSUIP_STATIC=ON
+    -DIPSUIP_STATIC=ON \
+    -DIPSUIP_BUNDLED_OPENSSL=OFF
   cmake --build "${srcdir}/build"
 }
 
