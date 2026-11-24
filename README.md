@@ -1,120 +1,65 @@
 # ipsuip
 
-`ipsuip` — консольная программа и TUI для просмотра географической иерархии
-IP-адресов сервиса [suip.biz](https://suip.biz/) (`континент → страна →
-регион → город`) и экспорта диапазонов в форматах Range и CIDR.
+`ipsuip` — утилита для парсинга IP-адресов с [suip.biz](https://suip.biz/).
+Она помогает найти диапазоны адресов нужной страны или города и сохранить их
+в форматах Range или CIDR.
 
-Программа обходит страницы `?act=all-country-ip`, разбирает их с помощью
-lexbor, кэширует навигацию в JSON и скачивает большие выгрузки адресов
-потоково во временный файл (без загрузки всего HTML в память).
+Работает в командной строке и в интерактивном меню.
 
 ## Возможности
 
-- консольный режим с выбором уровня по коду или названию;
-- интерактивный TUI: списки, breadcrumb, навигация, сохранение IP-списков;
-- меню «Настройки»: очистка кэша и настройка прокси с немедленным применением;
-- индикатор прогресса загрузки в `stderr` (байты, проценты при известном
-  `Content-Length`, скорость) и в статусной строке TUI;
-- HTTP- и SOCKS5-прокси с авторизацией, настройка через `--proxy`, конфиг или TUI;
-- кэш навигационных страниц (страницы с IP-адресами не кэшируются);
-- статическая сборка на Linux и Windows.
+- навигация: континент → страна → регион → город;
+- получение IP-диапазонов и сохранение в Range/CIDR;
+- CLI и TUI;
+- настройка HTTP/SOCKS5-прокси;
+- индикатор прогресса загрузки;
+- кэш навигации и его очистка.
 
 ## Зависимости
 
-lexbor, Boost и PDCursesMod загружает и собирает сам CMake (FetchContent) —
-вручную их ставить не нужно. **OpenSSL подключается только как системная
-разделяемая библиотека**: он не собирается и не линкуется статически.
+Для сборки нужны компилятор C++20, CMake 3.28+, Ninja или Make и OpenSSL
+с заголовками. `lexbor`, `Boost` и `PDCursesMod` CMake загрузит и соберёт сам.
 
-| Компонент | Версия | Способ подключения |
-|---|---|---|
-| C++20 компилятор | GCC/Clang/MSVC | системный |
-| CMake | ≥ 3.28 | системный |
-| Ninja / Make | — | системный |
-| lexbor | 3.0.1 | FetchContent, `LEXBOR_BUILD_SHARED=OFF` |
-| Boost (asio, beast, json, system, config, container, intrusive, optional, smart_ptr, mp11, endian, winapi и include-замыкание) | 1.92.0 | FetchContent модулей Boost |
-| PDCursesMod | 4.5.4 | FetchContent, порт `vt` (Unix) / `wincon` (Windows), без демо-целей |
-| OpenSSL: заголовки + `libssl.so` / `libcrypto.so` | ≥ 1.1.1 | системный `find_package(OpenSSL)`, `OPENSSL_USE_STATIC_LIBS=FALSE` |
+OpenSSL используется как системная библиотека:
 
-Дополнительно определено `BOOST_ASIO_DISABLE_BOOST_DATE_TIME`: Asio работает
-без Boost.DateTime, который не входит в замыкание заголовков.
+- для сборки нужны заголовки: в Arch — пакет `openssl`, в Debian/Ubuntu —
+  `libssl-dev`;
+- для запуска нужны `libssl`/`libcrypto`: в Arch — `openssl`, в Debian/Ubuntu —
+  `libssl3` или `libssl3t64`, в Windows — DLL в `PATH` или рядом с
+  `ipsuip.exe`;
+- готовые пакеты не включают OpenSSL: зависимость ставит менеджер пакетов.
 
-### Где требуется OpenSSL
+Проверить после сборки: `ldd ./build/ipsuip | grep -E 'ssl|crypto'`.
 
-- **Для сборки:** нужны заголовки и разделяемые библиотеки OpenSSL (в Arch —
-  пакет `openssl`, в Debian/Ubuntu — `libssl-dev`). `find_package(OpenSSL)`
-  вызывается до настройки целей; `OPENSSL_USE_STATIC_LIBS` принудительно
-  выключен, поэтому выбираются именно `.so`/`.dll.a`, а не `.a`.
-- **Для запуска:** нужны системные `libssl.so` и `libcrypto.so` с compatible
-  SONAME (`libssl.so.3`/`.so.4` и `libcrypto.so.3`/`.so.4` — зависит от
-  версии дистрибутива). Arch: пакет `openssl`; Debian/Ubuntu: `libssl3` или
-  `libssl3t64`; Windows: `libssl-3-x64.dll` и `libcrypto-3-x64.dll` рядом с
-  `ipsuip.exe` или в `PATH`. Пакеты CPack и `PKGBUILD` объявляют эту
-  зависимость, но сами `.so` не включают: их ставит менеджер пакетов или
-  дистрибутив OpenSSL.
-- **Проверка после сборки:**
-  `ldd ./build/ipsuip | grep -E 'ssl|crypto'` — должны быть `libssl.so` и
-  `libcrypto.so` (не `not found`).
-- Если OpenSSL отсутствует, CMake завершится с ошибкой `Could NOT find
-  OpenSSL` — это означает, что не установлены именно dev-файлы OpenSSL.
-  Проверка находится в `CMakeLists.txt` в блоке «OpenSSL», до загрузки
-  `FetchContent`-зависимостей.
+## Сборка и установка
 
-## Сборка на Linux
+### Linux
 
 ```bash
-sudo pacman -S base-devel cmake ninja openssl   # пример для Arch Linux
+sudo pacman -S base-devel cmake ninja openssl
 cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ./build/ipsuip --help
-```
-
-Установка:
-
-```bash
 sudo cmake --install build --prefix /usr/local
 ```
 
-### Статическая сборка (кроме OpenSSL)
+По умолчанию включена опция `IPSUIP_STATIC=ON`: зависимости проекта линкуются
+статически, а системные libc и OpenSSL остаются динамическими. Если нужна
+обычная динамическая сборка, используйте `-DIPSUIP_STATIC=OFF`.
 
-По умолчанию включена опция `IPSUIP_STATIC=ON`:
+### Windows
 
-- Unix/MinGW: `-static-libgcc -static-libstdc++`. Флага `-static` **нет**:
-  libc и OpenSSL остаются динамическими;
-- MSVC: `/MT` (в Debug — `/MTd`, задаётся через `CMAKE_MSVC_RUNTIME_LIBRARY`);
-- lexbor, Boost и PDCursesMod собираются и линкуются статически;
-- OpenSSL — системный shared, в бинарник не включается.
+Нужен OpenSSL SDK с заголовками и библиотеками; DLL должны лежать рядом с
+`ipsuip.exe` или быть в `PATH`.
 
-```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DIPSUIP_STATIC=ON
-cmake --build build
-file build/ipsuip                       # dynamically linked
-ldd build/ipsuip | grep -E 'ssl|crypto' # libssl.so / libcrypto.so
-```
-
-Статические архивы libc (`libc.a` и др.) больше не нужны, а вместе с ними
-исчезает проблема `getaddrinfo`/NSS при полностью статической линковке.
-
-## Сборка на Windows
-
-### MSVC (Visual Studio)
-
-Нужен OpenSSL SDK для Windows (например, Shining Light Productions) с
-`libssl.lib` / `libcrypto.lib` и соответствующими DLL. DLL должны лежать рядом
-с `ipsuip.exe` или быть в `PATH`.
+MSVC:
 
 ```powershell
 cmake -S . -B build -G "Visual Studio 17 2022" -A x64 -DCMAKE_BUILD_TYPE=Release
 cmake --build build --config Release
 ```
 
-Runtime-библиотека MSVC принудительно статическая (`/MT`).
-
-### MinGW-w64 (в том числе кросс-сборка с Linux)
-
-Нужен OpenSSL для mingw-w64: заголовки и импортные библиотеки
-(`libssl.dll.a`, `libcrypto.dll.a`) в префиксе компилятора, а также рантайм-
-DLL. В Arch для кросс-сборки можно использовать пакет `mingw-w64-openssl`
-из AUR.
+MinGW-w64 (включая кросс-сборку с Linux):
 
 ```bash
 cmake -S . -B build-mingw -G Ninja \
@@ -123,29 +68,22 @@ cmake -S . -B build-mingw -G Ninja \
 cmake --build build-mingw
 ```
 
-Сборка использует порт PDCursesMod `wincon`; OpenSSL находится через
-`find_package(OpenSSL)` в системном префиксе mingw-w64.
+Для кросс-сборки нужен OpenSSL для mingw-w64 (в Arch — `mingw-w64-openssl`
+из AUR).
 
-## Пакеты (CPack)
+## Пакеты
 
 ```bash
 cd build
-cpack -G TGZ      # Linux
-cpack -G DEB      # Linux (пакет .deb)
-cpack -G ZIP      # Windows
-cpack -G NSIS     # Windows (установщик)
+cpack -G TGZ
+cpack -G DEB
+cpack -G ZIP
+cpack -G NSIS
 ```
 
-`CPACK_GENERATOR` автоматически выбирается по платформе: `TGZ;DEB` на Linux и
-`ZIP;NSIS` на Windows. В пакет входят `ipsuip` и `README.md`. OpenSSL в пакет
-**не включается**: DEB-пакет объявляет зависимость `libssl3 | libssl3t64`,
-ZIP/NSIS ожидают OpenSSL DLL в системе.
-
-Для Arch Linux есть `PKGBUILD` (AUR):
-
-```bash
-makepkg -si
-```
+На Linux создаются TGZ и DEB, на Windows — ZIP и NSIS. В пакет входят
+`ipsuip` и `README.md`; OpenSSL ставится отдельно. Для Arch Linux есть
+`PKGBUILD`: `makepkg -si`.
 
 ## Использование
 
@@ -155,29 +93,23 @@ makepkg -si
 # Список континентов
 ipsuip --mainland
 
-# Страны Европы / регионы России / города региона
+# Страны и города
 ipsuip --mainland EU --country
-ipsuip --mainland EU --country RU --province
 ipsuip --mainland EU --country RU --province Chelyabinsk --city
 
-# Диапазоны выбранного города
-ipsuip --mainland EU --country RU --province Chelyabinsk --city Kartaly
-
-# Сохранить диапазоны и CIDR выбранной цели в каталог
+# Сохранить диапазоны выбранного города в каталог
 ipsuip --mainland EU --country RU --province Chelyabinsk --city Kartaly \
   --output ./out
 
-# Обновить кэш навигации, отключить прогресс, задать прокси
+# Обновить кэш, убрать прогресс, задать или отключить прокси
 ipsuip --mainland EU --refresh
 ipsuip --mainland EU --quiet
 ipsuip --mainland EU --proxy http://user:pass@proxy.example:8080
 ipsuip --mainland EU --no-proxy
 ```
 
-`--refresh` заставляет заново загрузить навигационные страницы. `--quiet`
-отключает индикатор прогресса. Прогресс выводится только если `stderr` —
-терминал; формат: `Загрузка: 12.3 MB / 100 MB (12%) 3.45 MB/s`, либо
-`Загрузка: 12.3 MB 3.45 MB/s`, если `Content-Length` неизвестен.
+`--refresh` загружает навигационные страницы заново, `--quiet` убирает
+индикатор прогресса. Прогресс показывается только при выводе в терминал.
 
 ### TUI
 
@@ -185,28 +117,25 @@ ipsuip --mainland EU --no-proxy
 ipsuip --tui
 ```
 
-Клавиши:
-
 | Клавиша | Действие |
 |---|---|
 | `↑`/`↓`, `k`/`j` | выбор |
-| `PgUp`/`PgDn`, `Home`/`End` | прокрутка |
-| `Enter` | открыть страницу / сохранить IP-список |
+| `Enter` | открыть / сохранить |
 | `Backspace`, `Esc`, `←` | назад |
-| `s` (`F2`) | меню «Настройки» |
+| `s` (`F2`) | настройки |
 | `q` | выход |
 
-Меню «Настройки» содержит пункты «Очистить кэш», «Прокси» и «Назад».
-В диалоге «Прокси» строка проверяется перед применением; пустая строка
-отключает прокси. Изменение применяется к последующим запросам сразу и
-сохраняется в конфиг.
+В меню «Настройки» можно очистить кэш и задать прокси. Прокси применяется
+сразу и сохраняется в конфиг; пустая строка отключает его.
 
 ## Кэш и конфиг
 
-| Объект | Linux | Windows |
+| | Linux | Windows |
 |---|---|---|
-| Кэш навигации | `$XDG_CACHE_HOME/ipsuip/data.json` (по умолчанию `~/.cache/ipsuip/data.json`) | `%LOCALAPPDATA%\ipsuip\data.json` |
-| Конфиг | `$XDG_CONFIG_HOME/ipsuip/config.json` (по умолчанию `~/.config/ipsuip/config.json`) | `%APPDATA%\ipsuip\config.json` |
+| Кэш | `$XDG_CACHE_HOME/ipsuip/data.json` | `%LOCALAPPDATA%\ipsuip\data.json` |
+| Конфиг | `$XDG_CONFIG_HOME/ipsuip/config.json` | `%APPDATA%\ipsuip\config.json` |
+
+Если переменные XDG не заданы, используются `~/.cache` и `~/.config`.
 
 Пример `config.json`:
 
@@ -216,30 +145,6 @@ ipsuip --tui
 }
 ```
 
-Поддерживаемые форматы прокси:
-
-- `http://host:port`, `https://host:port` (по умолчанию порт 8080);
-- `socks5://host:port`, `socks5h://host:port` (по умолчанию порт 1080);
-- `host:port` — считается HTTP-прокси;
-- `http://user:pass@host:port` — с базовой авторизацией (RFC 7617);
-- `[::1]:1080` — IPv6-адрес;
-- пустая строка — без прокси.
-
-Приоритет: `--proxy` > конфиг > без прокси; `--no-proxy` принудительно
-отключает прокси для данного запуска.
-
-## Структура
-
-```
-CMakeLists.txt              OpenSSL (system shared), FetchContent, CPack
-cmake/toolchains/           toolchain-файл для MinGW-w64
-src/main.cpp                CLI и консольный режим
-src/tui/                    TUI на PDCursesMod
-src/http_client/            HTTPS-клиент на Boost.Asio/Beast
-src/suip_model.cpp          разбор HTML и загрузка IP-списков
-src/suip_cache.cpp          JSON-кэш навигации
-src/config.cpp, paths.cpp   конфиг и платформенные пути
-src/proxy.cpp               разбор и проверка прокси
-src/progress.cpp            прогресс загрузки в stderr
-PKGBUILD                    пакет для Arch Linux (AUR)
-```
+Поддерживаются `http://`, `https://`, `socks5://`, `socks5h://`, `host:port`,
+логин/пароль и IPv6. Приоритет: `--proxy` > конфиг; `--no-proxy` отключает
+прокси для текущего запуска.
