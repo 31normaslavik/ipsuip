@@ -118,11 +118,15 @@ include `ipsuip`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and
 `LICENSES/`. With system OpenSSL, dependencies are declared in DEB; with
 `IPSUIP_BUNDLED_OPENSSL=ON`, libraries are placed directly into the package.
 For Arch Linux there is a stable `PKGBUILD` (tag-based): `makepkg -si`, and
-`ipsuip-git` (`packaging/aur/ipsuip-git/PKGBUILD`) tracking `main`.
+`ipsuip-git` (`packaging/aur/ipsuip-git/PKGBUILD`) tracking `main`. Publishing
+to the AUR requires a public repository: this repository is currently private,
+so treat these files as templates and distribute the built packages manually.
 
 Ready-made archives, SHA256 checksums, an SBOM, and a signed manifest are
 published in [GitHub Releases](https://github.com/31normaslavik/ipsuip/releases)
-for each `vX.Y.Z` tag. See [docs/RELEASING.md](docs/RELEASING.md).
+for each `vX.Y.Z` tag. In a private repository, the release and its assets are
+only visible to authorized users with repository access. See
+[docs/RELEASING.md](docs/RELEASING.md).
 
 ## Usage
 

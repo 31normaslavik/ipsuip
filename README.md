@@ -115,11 +115,15 @@ cpack -G NSIS
 Со системным OpenSSL зависимости объявляются в DEB, с
 `IPSUIP_BUNDLED_OPENSSL=ON` библиотеки кладутся прямо в пакет. Для Arch Linux
 есть стабильный `PKGBUILD` (от тега): `makepkg -si`, и `ipsuip-git`
-(`packaging/aur/ipsuip-git/PKGBUILD`) для ветки `main`.
+(`packaging/aur/ipsuip-git/PKGBUILD`) для ветки `main`. Публикация в AUR
+требует публичного репозитория: сейчас репозиторий приватный, поэтому эти
+файлы следует считать шаблоном, а готовые пакеты — распространять вручную.
 
 Готовые архивы, контрольные суммы SHA256, SBOM и подписанный манифест
 публикуются в [GitHub Releases](https://github.com/31normaslavik/ipsuip/releases)
-по тегу `vX.Y.Z`. Порядок релиза описан в [docs/RELEASING.md](docs/RELEASING.md).
+по тегу `vX.Y.Z`. В приватном репозитории релиз и его ассеты доступны только
+авторизованным пользователям с доступом к репозиторию. Порядок релиза описан
+в [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Использование
 

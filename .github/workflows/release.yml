@@ -112,6 +112,8 @@ jobs:
         run: |
           cd dist
           cosign sign-blob --yes --bundle SHA256SUMS.bundle SHA256SUMS
+      - name: Prepare release notes
+        run: bash scripts/release-notes.sh > release-notes.md
       - name: Create release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -119,5 +121,5 @@ jobs:
           mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
           gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --title "$GITHUB_REF_NAME" \
-            --generate-notes \
+            --notes-file release-notes.md \
             --verify-tag

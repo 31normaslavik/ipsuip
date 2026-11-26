@@ -24,14 +24,21 @@
 
    Если подпись не настроена: `git tag -a ...` (без `-s`).
 
-7. Workflow `.github/workflows/release.yml` соберёт пакеты для Linux, Windows,
-   macOS и MinGW, посчитает `SHA256SUMS`, создаст SBOM и подпишет манифест,
-   затем опубликует GitHub Release с авто-notes.
+7. Workflow `.github/workflows/release.yml` соберёт пакеты для Linux, Windows
+   и macOS, посчитает `SHA256SUMS`, создаст SBOM и подпишет манифест, затем
+   опубликует GitHub Release с заметками из секции текущей версии
+   `CHANGELOG.md` (`scripts/release-notes.sh`).
 8. Проверить релиз: наличие всех архивов, `SHA256SUMS`, `SHA256SUMS.bundle`,
    `ipsuip-sbom.spdx.json`, корректность `--version` в бинарнике.
-9. Обновить AUR: для `ipsuip` заменить `SKIP` на реальную контрольную сумму архива тега
-   (`bash scripts/aur-checksum.sh`) и переключить `source` на tarball;
-   `ipsuip-git` остаётся на ветке `main`.
+9. Если репозиторий публичный, обновить AUR: для `ipsuip` заменить `SKIP` на
+   реальную контрольную сумму архива тега (`bash scripts/aur-checksum.sh`) и
+   переключить `source` на tarball; `ipsuip-git` остаётся на ветке `main`.
+   В приватном репозитории архив тега недоступен без авторизации, поэтому
+   публикация в AUR невозможна — рассылайте пакеты из релиза вручную.
+
+> Репозиторий `31normaslavik/ipsuip` сейчас приватный: релиз и ассеты видны
+> только пользователям с доступом. Защита веток и часть настроек безопасности
+> требуют публичного репозитория или GitHub Pro — см. `SECURITY.md`.
 
 ## Откат
 
