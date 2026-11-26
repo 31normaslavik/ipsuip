@@ -51,7 +51,7 @@ jobs:
             os: windows-2022
             generator: Visual Studio 17 2022
             arch: x64
-            extra: ""
+            extra: -DIPSUIP_BUNDLED_OPENSSL=ON
     steps:
       - uses: actions/checkout@v4
         with:
@@ -71,6 +71,11 @@ jobs:
       - name: Install dependencies (macOS)
         if: runner.os == 'macOS'
         run: brew install ninja ccache openssl@3
+
+      # Собранный OpenSSL на Windows требует NASM (см. IPSUIP_BUNDLED_OPENSSL).
+      - name: Install NASM (Windows bundled OpenSSL)
+        if: runner.os == 'Windows'
+        uses: ilammy/setup-nasm@v1
 
       - name: Cache ccache
         if: runner.os != 'Windows'
