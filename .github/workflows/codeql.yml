@@ -14,6 +14,9 @@ permissions:
 jobs:
   analyze:
     name: Analyze C/C++
+    # Code scanning недоступен в приватном репозитории без GitHub Pro/GHAS.
+    # Для приватного репо с включённым code scanning задайте variable CODEQL_ENABLED=true.
+    if: github.event.repository.visibility == 'public' || vars.CODEQL_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     permissions:
