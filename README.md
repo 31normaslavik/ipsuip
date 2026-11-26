@@ -110,7 +110,7 @@ cpack -G ZIP
 cpack -G NSIS
 ```
 
-На Linux создаются TGZ и DEB, на Windows — ZIP и NSIS. В пакет входят
+На Linux создаются TGZ и DEB, на macOS — TGZ, на Windows — ZIP и NSIS. В пакет входят
 `ipsuip`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` и `LICENSES/`.
 Со системным OpenSSL зависимости объявляются в DEB, с
 `IPSUIP_BUNDLED_OPENSSL=ON` библиотеки кладутся прямо в пакет. Для Arch Linux

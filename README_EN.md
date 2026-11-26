@@ -112,7 +112,8 @@ cpack -G ZIP
 cpack -G NSIS
 ```
 
-On Linux, TGZ and DEB packages are created; on Windows — ZIP and NSIS. Packages
+On Linux, TGZ and DEB packages are created; on macOS — TGZ; on Windows — ZIP
+and NSIS. Packages
 include `ipsuip`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and
 `LICENSES/`. With system OpenSSL, dependencies are declared in DEB; with
 `IPSUIP_BUNDLED_OPENSSL=ON`, libraries are placed directly into the package.

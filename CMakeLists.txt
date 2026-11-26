@@ -74,9 +74,10 @@ if(MSVC)
   # /MT для Release и /MTd для Debug.
   set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
   add_compile_options(/MP)
-elseif(IPSUIP_STATIC)
+elseif(IPSUIP_STATIC AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
   # Только рантайм GCC и зависимости проекта статические. libc и OpenSSL
   # остаются динамическими: OpenSSL НЕ линкуется статически (см. ниже).
+  # Флаги GCC-рантайма поддерживаются только Linux: на macOS clang их нет.
   add_link_options(-static-libgcc -static-libstdc++)
 endif()
 
@@ -342,7 +343,7 @@ install(FILES
 install(DIRECTORY LICENSES DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 
 # ---------------------------------------------------------------------------
-# CPack: ZIP/NSIS для Windows, TGZ/DEB для Linux
+# CPack: ZIP/NSIS для Windows, TGZ для macOS, TGZ/DEB для Linux
 # ---------------------------------------------------------------------------
 
 set(CPACK_PACKAGE_NAME "ipsuip")
@@ -360,6 +361,8 @@ if(WIN32)
   set(CPACK_NSIS_DISPLAY_NAME "ipsuip")
   set(CPACK_NSIS_PACKAGE_NAME "ipsuip")
   set(CPACK_NSIS_ENABLE_UNINSTALL_BEFORE_INSTALL ON)
+elseif(APPLE)
+  set(CPACK_GENERATOR "TGZ")
 else()
   set(CPACK_GENERATOR "TGZ;DEB")
   set(CPACK_DEBIAN_PACKAGE_MAINTAINER "ipsuip maintainers")

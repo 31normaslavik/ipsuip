@@ -129,7 +129,7 @@ jobs:
           cmake-version: '3.28.3'
       - run: |
           sudo apt-get update
-          sudo apt-get install -y ninja-build mingw-w64 perl make
+          sudo apt-get install -y ninja-build mingw-w64 perl make nasm
       - run: |
           cmake -S . -B build-mingw -G Ninja \
             -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/mingw-w64.cmake \
