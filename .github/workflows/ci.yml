@@ -109,7 +109,7 @@ jobs:
         run: cmake --build build --config Release --target package
 
       - name: Upload packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: packages-${{ matrix.name }}
           path: |
@@ -140,7 +140,7 @@ jobs:
             -DCPACK_PACKAGE_DIRECTORY="$GITHUB_WORKSPACE/artifacts"
           cmake --build build-mingw --parallel 2
           cpack --config build-mingw/CPackConfig.cmake -G ZIP
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: packages-mingw-w64
           path: |
