@@ -1,0 +1,66 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 28,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "BUILD_TESTING": "ON"
+      }
+    },
+    {
+      "name": "unix",
+      "inherits": "base",
+      "generator": "Ninja",
+      "displayName": "Unix (GCC/Clang, system OpenSSL)"
+    },
+    {
+      "name": "bundle",
+      "inherits": "base",
+      "generator": "Ninja",
+      "displayName": "Unix with bundled OpenSSL",
+      "cacheVariables": {
+        "IPSUIP_BUNDLED_OPENSSL": "ON"
+      }
+    },
+    {
+      "name": "windows",
+      "inherits": "base",
+      "generator": "Visual Studio 17 2022",
+      "architecture": {
+        "value": "x64",
+        "strategy": "set"
+      }
+    }
+  ],
+  "buildPresets": [
+    { "name": "unix", "configurePreset": "unix" },
+    { "name": "bundle", "configurePreset": "bundle" },
+    { "name": "windows", "configurePreset": "windows", "configuration": "Release" }
+  ],
+  "testPresets": [
+    {
+      "name": "unix",
+      "configurePreset": "unix",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "bundle",
+      "configurePreset": "bundle",
+      "output": { "outputOnFailure": true }
+    },
+    {
+      "name": "windows",
+      "configurePreset": "windows",
+      "configuration": "Release",
+      "output": { "outputOnFailure": true }
+    }
+  ]
+}

@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: BSL-1.0
 // Copyright (c) 2016-2019 Vinnie Falco
 // Based on the Boost.Beast root_certificates example.
+// ВНИМАНИЕ: бандл собран в 2016-2019 гг. и используется только как фолбэк на
+// Unix и как основной источник на Windows. Обновляйте его при выпуске релиза
+// (Mozilla CA bundle / curl cacert.pem), чтобы не потерять свежие корневые CA.
 #pragma once
 #include <boost/asio/ssl/context.hpp>
 

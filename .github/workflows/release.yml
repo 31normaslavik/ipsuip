@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: release-${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-24.04
+            generator: Ninja
+            extra: -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          - name: windows
+            os: windows-2022
+            generator: Visual Studio 17 2022
+            arch: x64
+            extra: -DIPSUIP_BUNDLED_OPENSSL=ON
+          - name: macos
+            os: macos-15
+            generator: Ninja
+            extra: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.3'
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja openssl@3
+      - name: Configure
+        shell: bash
+        env:
+          GENERATOR: ${{ matrix.generator }}
+          ARCH: ${{ matrix.arch }}
+          EXTRA: ${{ matrix.extra }}
+        run: |
+          arch_flag=""
+          if [ -n "$ARCH" ]; then arch_flag="-A $ARCH"; fi
+          cmake -S . -B build -G "$GENERATOR" $arch_flag \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DCPACK_PACKAGE_DIRECTORY="$GITHUB_WORKSPACE/artifacts" \
+            $EXTRA
+      - run: cmake --build build --config Release --parallel 2
+      - run: ctest --test-dir build --build-config Release --output-on-failure
+      - run: cmake --build build --config Release --target package
+      - name: Checksums
+        shell: bash
+        run: |
+          cd artifacts
+          sha256sum * > "SHA256SUMS-${{ matrix.name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  publish:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+      - name: Build combined SHA256SUMS
+        run: |
+          cd dist
+          cat SHA256SUMS-* | sort > SHA256SUMS
+          rm SHA256SUMS-*
+      - uses: anchore/sbom-action@v0
+        with:
+          path: .
+          format: spdx-json
+          output-file: dist/ipsuip-sbom.spdx.json
+      - uses: sigstore/cosign-installer@v3
+      - name: Sign checksum manifest
+        run: |
+          cd dist
+          cosign sign-blob --yes --bundle SHA256SUMS.bundle SHA256SUMS
+      - name: Create release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" dist/* \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

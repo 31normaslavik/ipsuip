@@ -68,6 +68,19 @@ bool save_config(const Config &cfg) {
     }
   }
 
+#if !defined(_WIN32)
+  // В конфиге может храниться прокси с логином и паролем: доступ только
+  // владельцу. Права выставляются на временный файл до atomic rename.
+  std::filesystem::permissions(
+      tmp,
+      std::filesystem::perms::owner_read | std::filesystem::perms::owner_write,
+      std::filesystem::perm_options::replace, ec);
+  if (ec) {
+    std::filesystem::remove(tmp, ec);
+    return false;
+  }
+#endif
+
   std::filesystem::rename(tmp, path, ec);
   if (ec) {
     std::filesystem::remove(tmp, ec);

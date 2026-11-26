@@ -1,0 +1,46 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '37 5 * * 1'
+
+permissions:
+  contents: read
+
+jobs:
+  analyze:
+    name: Analyze C/C++
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      actions: read
+      contents: read
+      security-events: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.3'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev
+      - uses: github/codeql-action/init@v3
+        with:
+          languages: cpp
+          queries: security-extended
+      - name: Build for analysis
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTING=OFF \
+            -DIPSUIP_STATIC=OFF
+          cmake --build build --parallel 2
+      - uses: github/codeql-action/analyze@v3
+        with:
+          category: cpp

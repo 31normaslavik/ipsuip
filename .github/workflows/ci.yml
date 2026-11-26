@@ -1,0 +1,174 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version-check:
+    name: Version metadata
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash scripts/check-version.sh
+
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: ubuntu-gcc
+            os: ubuntu-24.04
+            generator: Ninja
+            extra: -DCMAKE_C_COMPILER=gcc -DCMAKE_CXX_COMPILER=g++
+          - name: ubuntu-clang
+            os: ubuntu-24.04
+            generator: Ninja
+            extra: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: ubuntu-bundled-openssl
+            os: ubuntu-24.04
+            generator: Ninja
+            extra: -DIPSUIP_BUNDLED_OPENSSL=ON
+          - name: macos-clang
+            os: macos-15
+            generator: Ninja
+            extra: -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+          - name: windows-msvc
+            os: windows-2022
+            generator: Visual Studio 17 2022
+            arch: x64
+            extra: ""
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup CMake
+        uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.3'
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build libssl-dev ccache perl make
+
+      - name: Install dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: brew install ninja ccache openssl@3
+
+      - name: Cache ccache
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ccache
+          key: ccache-${{ matrix.name }}-${{ github.sha }}
+          restore-keys: ccache-${{ matrix.name }}-
+
+      - name: Configure
+        shell: bash
+        env:
+          GENERATOR: ${{ matrix.generator }}
+          ARCH: ${{ matrix.arch }}
+          EXTRA: ${{ matrix.extra }}
+        run: |
+          arch_flag=""
+          if [ -n "$ARCH" ]; then arch_flag="-A $ARCH"; fi
+          cache_flags=""
+          if [ "$RUNNER_OS" != "Windows" ]; then
+            cache_flags="-DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache"
+          fi
+          cmake -S . -B build -G "$GENERATOR" $arch_flag \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTING=ON \
+            -DCPACK_PACKAGE_DIRECTORY="$GITHUB_WORKSPACE/artifacts" \
+            $cache_flags $EXTRA
+
+      - name: Build
+        run: cmake --build build --config Release --parallel 2
+
+      - name: Test
+        run: ctest --test-dir build --build-config Release --output-on-failure
+
+      - name: Package
+        run: cmake --build build --config Release --target package
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-${{ matrix.name }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  cross-mingw:
+    name: mingw-w64 cross build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.3'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build mingw-w64 perl make
+      - run: |
+          cmake -S . -B build-mingw -G Ninja \
+            -DCMAKE_TOOLCHAIN_FILE=cmake/toolchains/mingw-w64.cmake \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DIPSUIP_BUNDLED_OPENSSL=ON \
+            -DCPACK_PACKAGE_DIRECTORY="$GITHUB_WORKSPACE/artifacts"
+          cmake --build build-mingw --parallel 2
+          cpack --config build-mingw/CPackConfig.cmake -G ZIP
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-mingw-w64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+  sanitizers:
+    name: asan-ubsan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    env:
+      ASAN_OPTIONS: detect_leaks=1
+      UBSAN_OPTIONS: print_stacktrace=1
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: jwlawson/actions-setup-cmake@v2
+        with:
+          cmake-version: '3.28.3'
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build clang libssl-dev
+      - run: |
+          cmake -S . -B build-sanitize -G Ninja \
+            -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DIPSUIP_STATIC=OFF \
+            -DCMAKE_C_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer" \
+            -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
+          cmake --build build-sanitize --parallel 2
+          ctest --test-dir build-sanitize --output-on-failure

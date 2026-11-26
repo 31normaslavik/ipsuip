@@ -2,6 +2,7 @@
 #include "http_client_sync_ssl.h"
 #include "proxy.h"
 #include "root_certificates.h"
+#include "version.h"
 
 #include <boost/asio.hpp>
 #include <boost/asio/co_spawn.hpp>
@@ -240,7 +241,16 @@ asio::awaitable<std::string> try_get(const UrlParts &url,
   auto ex = co_await asio::this_coro::executor;
 
   asio::ssl::context ssl_ctx(asio::ssl::context::tls_client);
+#if defined(_WIN32)
+  // Системного хранилища в OpenSSL для Windows нет — используем бандл.
   load_root_certificates(ssl_ctx);
+#else
+  // На Unix предпочитаем актуальные корневые сертификаты системы; встроенный
+  // бандл остаётся фолбэком для систем без настроенного CA store.
+  beast::error_code ca_ec;
+  ssl_ctx.set_default_verify_paths(ca_ec);
+  if (ca_ec) load_root_certificates(ssl_ctx);
+#endif
   ssl_ctx.set_verify_mode(asio::ssl::verify_peer);
 
   tcp::resolver resolver(ex);
@@ -281,7 +291,7 @@ asio::awaitable<std::string> try_get(const UrlParts &url,
   // Send request
   http::request<http::empty_body> req(http::verb::get, url.target, 11);
   req.set(http::field::host, url.host);
-  req.set(http::field::user_agent, "ipsuip/0.1");
+  req.set(http::field::user_agent, std::string("ipsuip/") + IPSUIP_VERSION_STRING);
   req.set(http::field::accept_encoding, "identity");
 
   co_await http::async_write(stream, req, asio::use_awaitable);

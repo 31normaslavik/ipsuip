@@ -1,0 +1,37 @@
+# Maintainer: 31normaslavik <16459524+31normaslavik@users.noreply.github.com>
+# Актуальная сборка из ветки main (AUR package: ipsuip-git).
+pkgbase=ipsuip-git
+pkgname=ipsuip-git
+pkgver=0.1.0.r0.g0000000
+pkgrel=1
+pkgdesc='CLI и TUI для скачивания IP-диапазонов suip.biz с экспортом Range/CIDR'
+arch=('x86_64' 'aarch64')
+url='https://github.com/31normaslavik/ipsuip'
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'openssl')
+makedepends=('cmake' 'ninja' 'git')
+source=("${pkgbase}::git+${url}#branch=main")
+sha256sums=('SKIP')
+
+pkgver() {
+  cd "${srcdir}/${pkgbase}"
+  git describe --long --tags --abbrev=7 | sed 's/^v//;s/\([^-]*-g\)/r\1/;s/-/./g'
+}
+
+build() {
+  local src="${srcdir}/${pkgbase}"
+  cmake -S "${src}" -B "${srcdir}/build" -G Ninja \
+    -DCMAKE_BUILD_TYPE=Release \
+    -DCMAKE_INSTALL_PREFIX=/usr \
+    -DIPSUIP_STATIC=ON \
+    -DIPSUIP_BUNDLED_OPENSSL=OFF
+  cmake --build "${srcdir}/build"
+}
+
+check() {
+  "${srcdir}/build/ipsuip" --help > /dev/null
+}
+
+package() {
+  DESTDIR="${pkgdir}" cmake --install "${srcdir}/build"
+}

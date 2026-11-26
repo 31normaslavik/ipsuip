@@ -1,0 +1,42 @@
+name: Bug report
+description: Сообщить об ошибке в ipsuip
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за отчёт! Не прикладывайте токены, пароли прокси и приватные IP-списки.
+  - type: input
+    id: version
+    attributes:
+      label: Версия ipsuip
+      description: Вывод `ipsuip --version`
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: ОС
+      options: [Linux, macOS, Windows, Other]
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      placeholder: |
+        1. ...
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактический и ожидаемый результат
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Логи
+      render: shell

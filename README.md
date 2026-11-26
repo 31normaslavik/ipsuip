@@ -1,5 +1,8 @@
 # ipsuip
 
+[![CI](https://github.com/31normaslavik/ipsuip/actions/workflows/ci.yml/badge.svg)](https://github.com/31normaslavik/ipsuip/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/31normaslavik/ipsuip)](https://github.com/31normaslavik/ipsuip/releases)
+
 English version: [README_EN.md](README_EN.md)
 
 `ipsuip` — утилита для парсинга IP-адресов с [suip.biz](https://suip.biz/).
@@ -20,8 +23,8 @@ English version: [README_EN.md](README_EN.md)
 ## Зависимости
 
 По умолчанию для сборки нужны компилятор C++20, CMake 3.28+, Ninja или Make
-и OpenSSL с заголовками. `lexbor`, `Boost` и `PDCursesMod` CMake загрузит и
-соберёт сам.
+и OpenSSL 1.1.1+ с заголовками. `lexbor`, `Boost` и `PDCursesMod` CMake загрузит и
+соберёт сам. Все загружаемые архивы зафиксированы по SHA256 в `CMakeLists.txt`.
 
 По умолчанию OpenSSL используется как системная библиотека:
 
@@ -56,11 +59,16 @@ cmake --build build
 
 ```bash
 sudo pacman -S base-devel cmake ninja openssl
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./build/ipsuip --help
-sudo cmake --install build --prefix /usr/local
+cmake --preset unix
+cmake --build --preset unix
+ctest --preset unix --output-on-failure
+./build/unix/ipsuip --help
+sudo cmake --install build/unix --prefix /usr/local
 ```
+
+Пресеты (`unix`, `bundle`, `windows`) описаны в `CMakePresets.json`. Версию и
+хэш коммита показывает `ipsuip --version`; единственный источник версии —
+файл `VERSION`.
 
 По умолчанию включена опция `IPSUIP_STATIC=ON`: зависимости проекта линкуются
 статически, а системные libc и OpenSSL остаются динамическими. Если нужна
@@ -103,9 +111,15 @@ cpack -G NSIS
 ```
 
 На Linux создаются TGZ и DEB, на Windows — ZIP и NSIS. В пакет входят
-`ipsuip` и `README.md`. Со системным OpenSSL зависимости объявляются в DEB,
-с `IPSUIP_BUNDLED_OPENSSL=ON` библиотеки кладутся прямо в пакет. Для Arch Linux
-есть `PKGBUILD`: `makepkg -si`.
+`ipsuip`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md` и `LICENSES/`.
+Со системным OpenSSL зависимости объявляются в DEB, с
+`IPSUIP_BUNDLED_OPENSSL=ON` библиотеки кладутся прямо в пакет. Для Arch Linux
+есть стабильный `PKGBUILD` (от тега): `makepkg -si`, и `ipsuip-git`
+(`packaging/aur/ipsuip-git/PKGBUILD`) для ветки `main`.
+
+Готовые архивы, контрольные суммы SHA256, SBOM и подписанный манифест
+публикуются в [GitHub Releases](https://github.com/31normaslavik/ipsuip/releases)
+по тегу `vX.Y.Z`. Порядок релиза описан в [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Использование
 
@@ -163,13 +177,28 @@ ipsuip --tui
 
 ```json
 {
-  "proxy": "socks5://127.0.0.1:9050"
+  "proxy": "socks5://127.0.0.1:9050",
+  "create_subdirs": false
 }
 ```
 
 Поддерживаются `http://`, `https://`, `socks5://`, `socks5h://`, `host:port`,
 логин/пароль и IPv6. Приоритет: `--proxy` > конфиг; `--no-proxy` отключает
 прокси для текущего запуска.
+
+## Разработка
+
+Тесты не требуют сети: фикстуры лежат в `tests/fixtures/`.
+
+```bash
+cmake --preset unix
+cmake --build --preset unix
+ctest --preset unix --output-on-failure
+```
+
+CI проверяет сборку на Linux (GCC/Clang), macOS, Windows (MSVC), кросс-сборку
+MinGW-w64 и запуск тестов под ASan/UBSan. См. [CONTRIBUTING.md](CONTRIBUTING.md)
+и [SECURITY.md](SECURITY.md).
 
 ## Лицензия
 

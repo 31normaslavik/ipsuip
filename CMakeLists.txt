@@ -5,12 +5,38 @@ if(CMAKE_VERSION VERSION_GREATER_EQUAL "4.0")
   set(CMAKE_POLICY_VERSION_MINIMUM "3.5" CACHE STRING "" FORCE)
 endif()
 
-project(ipsuip VERSION 0.1.0 LANGUAGES C CXX)
+# Единственный источник версии проекта: файл VERSION в корне репозитория.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/VERSION" IPSUIP_VERSION_RAW)
+string(STRIP "${IPSUIP_VERSION_RAW}" IPSUIP_VERSION)
+project(ipsuip VERSION ${IPSUIP_VERSION} LANGUAGES C CXX)
+
+set(IPSUIP_GIT_COMMIT "unknown")
+if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/.git")
+  find_package(Git QUIET)
+  if(GIT_FOUND)
+    execute_process(
+      COMMAND "${GIT_EXECUTABLE}" rev-parse --short HEAD
+      WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+      OUTPUT_VARIABLE IPSUIP_GIT_COMMIT
+      OUTPUT_STRIP_TRAILING_WHITESPACE
+      ERROR_QUIET
+    )
+  endif()
+endif()
+if(NOT IPSUIP_GIT_COMMIT)
+  set(IPSUIP_GIT_COMMIT "unknown")
+endif()
+configure_file(
+  "${CMAKE_CURRENT_SOURCE_DIR}/cmake/version.h.in"
+  "${CMAKE_CURRENT_BINARY_DIR}/generated/version.h"
+  @ONLY
+)
 
 include(GNUInstallDirs)
 include(FetchContent)
 include(ExternalProject)
 include(CheckSymbolExists)
+include(CTest)
 find_package(Threads REQUIRED)
 
 # ---------------------------------------------------------------------------
@@ -24,6 +50,13 @@ set(IPSUIP_BOOST_VERSION "1.92.0" CACHE STRING "Версия Boost (модуль
 set(IPSUIP_LEXBOR_VERSION "3.0.1" CACHE STRING "Версия lexbor")
 set(IPSUIP_OPENSSL_VERSION "3.6.5" CACHE STRING "Версия OpenSSL для IPSUIP_BUNDLED_OPENSSL")
 set(IPSUIP_PDCURSES_VERSION "4.5.4" CACHE STRING "Версия PDCursesMod")
+
+# Фиксация загружаемых архивов (sha256sum с официальных URL). При обновлении
+# версии зависимости обновите соответствующий хэш — иначе сборка прервётся.
+set(IPSUIP_BOOST_SHA256 "f51707c27359a0df0cac1beada86de31bb5eed5e8285592dadec384df99c2984" CACHE STRING "SHA256 Boost")
+set(IPSUIP_LEXBOR_SHA256 "08ce3d18efdd09b8b3488779b97509f83cc181e09a5a4cd8162ac08d77266600" CACHE STRING "SHA256 lexbor")
+set(IPSUIP_OPENSSL_SHA256 "a2157c2830efdec3788939b00c9b0638306d3f0bbb76dc4832ee503bb397df98" CACHE STRING "SHA256 OpenSSL")
+set(IPSUIP_PDCURSES_SHA256 "d5efc7f2b7107abe382bdf8bac0a9bfd8e716facbca2bb9cf12dfeb8e1122c4b" CACHE STRING "SHA256 PDCursesMod")
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -106,6 +139,7 @@ if(IPSUIP_BUNDLED_OPENSSL)
 
   ExternalProject_Add(ipsuip_openssl_ep
     URL "https://github.com/openssl/openssl/releases/download/openssl-${IPSUIP_OPENSSL_VERSION}/openssl-${IPSUIP_OPENSSL_VERSION}.tar.gz"
+    URL_HASH SHA256=${IPSUIP_OPENSSL_SHA256}
     DOWNLOAD_EXTRACT_TIMESTAMP TRUE
     DOWNLOAD_DIR "${CMAKE_BINARY_DIR}/third_party/downloads"
     SOURCE_DIR "${SSL_SRC}"
@@ -168,6 +202,7 @@ set(LEXBOR_INSTALL_HEADERS OFF CACHE BOOL "" FORCE)
 
 FetchContent_Declare(lexbor
   URL "https://github.com/lexbor/lexbor/archive/refs/tags/v${IPSUIP_LEXBOR_VERSION}.tar.gz"
+  URL_HASH SHA256=${IPSUIP_LEXBOR_SHA256}
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(lexbor)
@@ -190,13 +225,18 @@ set(BOOST_SKIP_INSTALL_RULES ON)
 set(BOOST_RUNTIME_LINK static)
 set(BOOST_ENABLE_MPI OFF)
 set(BOOST_ENABLE_PYTHON OFF)
+
+# Boost подключает BUILD_TESTING для своих целей; не выключаем тесты проекта.
+set(IPSUIP_BUILD_TESTING_SAVED "${BUILD_TESTING}")
 set(BUILD_TESTING OFF)
 
 FetchContent_Declare(boost
   URL "https://github.com/boostorg/boost/releases/download/boost-${IPSUIP_BOOST_VERSION}/boost-${IPSUIP_BOOST_VERSION}-cmake.tar.gz"
+  URL_HASH SHA256=${IPSUIP_BOOST_SHA256}
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_MakeAvailable(boost)
+set(BUILD_TESTING "${IPSUIP_BUILD_TESTING_SAVED}")
 
 # ---------------------------------------------------------------------------
 # PDCursesMod (FetchContent): только порт wincon (Windows) или vt (Unix).
@@ -212,6 +252,7 @@ endif()
 
 FetchContent_Declare(pdcurses
   URL "https://github.com/Bill-Gray/PDCursesMod/archive/refs/tags/v${IPSUIP_PDCURSES_VERSION}.tar.gz"
+  URL_HASH SHA256=${IPSUIP_PDCURSES_SHA256}
   DOWNLOAD_EXTRACT_TIMESTAMP TRUE
 )
 FetchContent_GetProperties(pdcurses)
@@ -278,10 +319,15 @@ target_link_libraries(suip_core PUBLIC
 add_subdirectory(src/tui)
 
 add_executable(ipsuip src/main.cpp)
+target_include_directories(ipsuip PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/generated")
 target_link_libraries(ipsuip PRIVATE
   suip_core ipsuip_tui ipsuip_curses
   Threads::Threads
 )
+
+if(BUILD_TESTING)
+  add_subdirectory(tests)
+endif()
 
 install(TARGETS ipsuip
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"

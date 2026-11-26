@@ -1,5 +1,8 @@
 # ipsuip
 
+[![CI](https://github.com/31normaslavik/ipsuip/actions/workflows/ci.yml/badge.svg)](https://github.com/31normaslavik/ipsuip/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/31normaslavik/ipsuip)](https://github.com/31normaslavik/ipsuip/releases)
+
 Russian version: [README.md](README.md)
 
 `ipsuip` is a utility for parsing IP addresses from [suip.biz](https://suip.biz/).
@@ -20,8 +23,9 @@ It works both in the command line and in an interactive menu.
 ## Dependencies
 
 By default, building requires a C++20 compiler, CMake 3.28+, Ninja or Make,
-and OpenSSL with headers. CMake will download and build `lexbor`, `Boost`, and
-`PDCursesMod` automatically.
+and OpenSSL 1.1.1+ with headers. CMake will download and build `lexbor`, `Boost`,
+and `PDCursesMod` automatically. Every downloaded archive is pinned by SHA256
+in `CMakeLists.txt`.
 
 By default, OpenSSL is used as a system library:
 
@@ -56,11 +60,16 @@ Perl, Make, and on Windows — NASM.
 
 ```bash
 sudo pacman -S base-devel cmake ninja openssl
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-./build/ipsuip --help
-sudo cmake --install build --prefix /usr/local
+cmake --preset unix
+cmake --build --preset unix
+ctest --preset unix --output-on-failure
+./build/unix/ipsuip --help
+sudo cmake --install build/unix --prefix /usr/local
 ```
+
+Presets (`unix`, `bundle`, `windows`) are defined in `CMakePresets.json`.
+`ipsuip --version` prints the version and commit hash; the single source of
+truth for the version is the `VERSION` file.
 
 By default, `IPSUIP_STATIC=ON` is enabled: project dependencies are linked
 statically, while system libc and OpenSSL remain dynamic. If you need a regular
@@ -104,9 +113,15 @@ cpack -G NSIS
 ```
 
 On Linux, TGZ and DEB packages are created; on Windows — ZIP and NSIS. Packages
-include `ipsuip` and `README.md`. With system OpenSSL, dependencies are declared
-in DEB; with `IPSUIP_BUNDLED_OPENSSL=ON`, libraries are placed directly into the
-package. For Arch Linux, there is a `PKGBUILD`: `makepkg -si`.
+include `ipsuip`, `README.md`, `LICENSE`, `THIRD_PARTY_NOTICES.md`, and
+`LICENSES/`. With system OpenSSL, dependencies are declared in DEB; with
+`IPSUIP_BUNDLED_OPENSSL=ON`, libraries are placed directly into the package.
+For Arch Linux there is a stable `PKGBUILD` (tag-based): `makepkg -si`, and
+`ipsuip-git` (`packaging/aur/ipsuip-git/PKGBUILD`) tracking `main`.
+
+Ready-made archives, SHA256 checksums, an SBOM, and a signed manifest are
+published in [GitHub Releases](https://github.com/31normaslavik/ipsuip/releases)
+for each `vX.Y.Z` tag. See [docs/RELEASING.md](docs/RELEASING.md).
 
 ## Usage
 
@@ -172,6 +187,20 @@ Example `config.json`:
 Supported: `http://`, `https://`, `socks5://`, `socks5h://`, `host:port`,
 login/password, and IPv6. Priority: `--proxy` > config; `--no-proxy` disables
 the proxy for the current run.
+
+## Development
+
+Tests are offline and use fixtures from `tests/fixtures/`.
+
+```bash
+cmake --preset unix
+cmake --build --preset unix
+ctest --preset unix --output-on-failure
+```
+
+CI builds on Linux (GCC/Clang), macOS, Windows (MSVC), cross-compiles with
+MinGW-w64, and runs the tests under ASan/UBSan. See
+[CONTRIBUTING.md](CONTRIBUTING.md) and [SECURITY.md](SECURITY.md).
 
 ## License
 

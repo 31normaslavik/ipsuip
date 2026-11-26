@@ -9,6 +9,7 @@
 #include "proxy.h"
 #include "suip_cache.h"
 #include "suip_model.h"
+#include "version.h"
 
 #include <algorithm>
 #include <cctype>
@@ -19,11 +20,6 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
-#include <lexbor/dom/dom.h>
-#include <lexbor/html/html.h>
-#include <lexbor/html/interfaces/document.h>
-#include <lexbor/html/serialize.h>
-#include <lexbor/url/url.h>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -56,116 +52,6 @@ void save_to_file(const std::string &data_raw_html,
   } catch (std::ofstream::failure &e) {
     std::cerr << e.what() << " code: " << e.code() << std::endl;
   }
-}
-
-static lxb_status_t callback(const lxb_char_t *data, size_t len, void *ctx) {
-  printf("%.*s", (int)len, (const char *)data);
-
-  return LXB_STATUS_OK;
-}
-
-int lexbor_test(const std::string &str) {
-  lxb_status_t status;
-  lxb_html_document_t *document;
-  lxb_dom_collection_t *collection;
-  lxb_dom_element_t *element;
-  lxb_url_parser_t url_parser;
-  lxb_url_t *base_url, *url;
-  const lxb_char_t *href;
-  size_t href_len;
-
-  static const lxb_char_t *html = reinterpret_cast<const lxb_char_t*>(str.c_str());
-    //   "<html><head><title>Example</title></head>"
-    //   "<body>"
-    //   "<a href=\"/about\">About</a>"
-    //   "<a href=\"news/today.html\">Today's News</a>"
-    //   "<a href=\"https://other.com/page\">Other Site</a>"
-    //   "<a href=\"../archive/2024.html\">Archive</a>"
-    //   "<a>No href</a>"
-    //   "</body></html>";
-  size_t html_len = str.length();
-
-  static const lxb_char_t base_url_str[] =
-      "https://suip.biz/";
-  size_t base_url_len = sizeof(base_url_str) - 1;
-
-  /* Step 1: Parse the HTML document. */
-
-  document = lxb_html_document_create();
-  if (document == NULL) {
-    std::cerr << "document == NULL" << std::endl;
-  }
-
-  status = lxb_html_document_parse(document, html, html_len);
-  if (status != LXB_STATUS_OK) {
-    std::cerr << "status != LXB_STATUS_OK" << std::endl;
-  }
-  /* Step 2: Find all <a> elements. */
-
-  collection = lxb_dom_collection_make(&document->dom_document, 128);
-  if (collection == NULL) {
-    std::cerr << "collection == NULL" << std::endl;
-  }
-
-
-  status =
-      lxb_dom_elements_by_tag_name(lxb_dom_interface_element(document->body),
-                                   collection, (const lxb_char_t *)"a", 1);
-  if (status != LXB_STATUS_OK) {
-    std::cerr << "status != LXB_STATUS_OK" << std::endl;
-  }
-
-  printf("Found %zu link(s).\n\n", lxb_dom_collection_length(collection));
-
-  /* Step 3: Initialize the URL parser and parse the base URL. */
-
-  status = lxb_url_parser_init(&url_parser, NULL);
-  if (status != LXB_STATUS_OK) {
-    std::cerr << "status != LXB_STATUS_OK" << std::endl;
-  }
-
-  base_url = lxb_url_parse(&url_parser, NULL, base_url_str, base_url_len);
-  if (base_url == NULL) {
-    std::cerr << "base_url == NULL" << std::endl;
-  }
-
-  /* Step 4: Iterate links, extract href, and resolve each URL. */
-
-  for (size_t i = 0; i < lxb_dom_collection_length(collection); i++) {
-    element = lxb_dom_collection_element(collection, i);
-
-    href = lxb_dom_element_get_attribute(element, (const lxb_char_t *)"href", 4,
-                                         &href_len);
-    if (href == NULL) {
-      printf("[%zu] <a> without href, skipping.\n", i);
-      continue;
-    }
-
-    printf("[%zu] href: %.*s\n", i, (int)href_len, (const char *)href);
-
-    /* Resolve the href against the base URL. */
-
-    lxb_url_parser_clean(&url_parser);
-
-    url = lxb_url_parse(&url_parser, base_url, href, href_len);
-    if (url == NULL) {
-      printf("     Failed to parse URL.\n");
-      continue;
-    }
-
-    printf("     Resolved: ");
-    (void)lxb_url_serialize(url, callback, NULL, false);
-    printf("\n");
-  }
-
-  /* Cleanup. */
-
-  lxb_dom_collection_destroy(collection, true);
-  lxb_url_parser_destroy(&url_parser, false);
-  lxb_url_memory_destroy(base_url);
-  lxb_html_document_destroy(document);
-
-  return EXIT_SUCCESS;
 }
 
 // ---- консольный режим --------------------------------------------------
@@ -292,6 +178,7 @@ struct LevelArg {
 struct Options {
   bool tui = false;
   bool help = false;
+  bool version = false;
   bool refresh = false;
   bool quiet = false;      // --quiet — не показывать прогресс в stderr
   std::string output_dir;
@@ -323,6 +210,7 @@ void print_usage(std::ostream &os) {
         "Флаг уровня без значения выводит список этого уровня, со значением —\n"
         "выбирает цель по коду или названию. --refresh игнорирует кэш\n"
         "навигационных страниц. --help показывает эту справку.\n"
+        "--version печатает версию и хэш коммита.\n"
         "--quiet отключает индикатор прогресса загрузки в stderr.\n"
         "\n"
         "Прокси: --proxy URL устанавливает прокси для всех запросов\n"
@@ -416,6 +304,8 @@ bool parse_args(int argc, char **argv, Options &opt, std::string &error) {
 
     if (arg == "--help" || arg == "-h")
       opt.help = true;
+    else if (arg == "--version")
+      opt.version = true;
     else if (arg == "--tui")
       opt.tui = true;
     else if (arg == "--refresh")
@@ -468,6 +358,12 @@ int main(int argc, char **argv) {
 
   if (opt.help) {
     print_usage(std::cout);
+    return 0;
+  }
+
+  if (opt.version) {
+    std::cout << "ipsuip " << IPSUIP_VERSION_STRING
+              << " (commit " << IPSUIP_GIT_COMMIT << ")\n";
     return 0;
   }
 

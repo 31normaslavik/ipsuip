@@ -11,6 +11,7 @@ add_library(http_client_sync_ssl STATIC
 
 target_include_directories(http_client_sync_ssl
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR} ${PROJECT_SOURCE_DIR}/src
+           ${PROJECT_BINARY_DIR}/generated
 )
 
 target_link_libraries(http_client_sync_ssl
