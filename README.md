@@ -1,5 +1,7 @@
 # ipsuip
 
+English version: [README_EN.md](README_EN.md)
+
 `ipsuip` — утилита для парсинга IP-адресов с [suip.biz](https://suip.biz/).
 Она помогает найти диапазоны адресов нужной страны или города и сохранить их
 в форматах Range или CIDR.
