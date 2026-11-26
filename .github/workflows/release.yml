@@ -74,7 +74,9 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.name }}
-          path: artifacts/*
+          path: |
+            artifacts/*
+            !artifacts/_CPack_Packages/**
           if-no-files-found: error
           retention-days: 7
 
@@ -114,7 +116,8 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "$GITHUB_REF_NAME" dist/* \
+          mapfile -t assets < <(find dist -maxdepth 1 -type f -print | sort)
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --title "$GITHUB_REF_NAME" \
             --generate-notes \
             --verify-tag
