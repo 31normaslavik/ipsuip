@@ -6,7 +6,7 @@ pkgver=0.1.0
 pkgrel=1
 pkgdesc='CLI и TUI для скачивания IP-диапазонов suip.biz с экспортом Range/CIDR'
 arch=('x86_64' 'aarch64')
-url='https://github.com/31normaslavik/ipsuip_develop'
+url='https://github.com/31normaslavik/ipsuip'
 license=('MIT')
 # OpenSSL подключается разделяемо: нужен и при сборке, и в рантайме.
 depends=('glibc' 'gcc-libs' 'openssl')
