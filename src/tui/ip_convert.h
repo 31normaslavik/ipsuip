@@ -20,4 +20,9 @@ std::vector<std::string> ranges_to_cidr(const std::vector<std::string> &ranges);
 // ведущие и хвостовые '_' обрезаются.
 std::string sanitize_filename(const std::string &name);
 
+// Приводит название к безопасному сегменту пути каталога:
+// пробелы и недопустимые символы заменяются на '_', повторы '_' схлопываются,
+// ведущие и хвостовые '_' и '.' обрезаются.
+std::string sanitize_path_segment(const std::string &name);
+
 } // namespace ipsuip

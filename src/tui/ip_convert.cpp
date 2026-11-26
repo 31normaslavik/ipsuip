@@ -126,4 +126,8 @@ std::string sanitize_filename(const std::string &name) {
   return collapsed.substr(b, e - b + 1);
 }
 
+std::string sanitize_path_segment(const std::string &name) {
+  return sanitize_filename(name);
+}
+
 } // namespace ipsuip

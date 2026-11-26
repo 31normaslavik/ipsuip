@@ -14,6 +14,7 @@
 #include <clocale>
 #include <cstdint>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <string>
@@ -315,7 +316,8 @@ Frame make_frame(const std::string &url, const std::string &title,
 
 // ---- сохранение IP-списков ---------------------------------------------
 
-bool write_lines(const std::string &path, const std::vector<std::string> &lines) {
+bool write_lines(const std::filesystem::path &path,
+                 const std::vector<std::string> &lines) {
   std::ofstream ofs(path);
   if (!ofs) return false;
   for (const auto &line : lines) ofs << line << '\n';
@@ -387,14 +389,97 @@ int choose_item(const std::string &title, const std::vector<std::string> &items,
   }
 }
 
-// Меню из двух пунктов. Возвращает false при отмене (Esc).
-bool choose_format(const std::string &name, size_t count, SaveFormat &format) {
-  const int sel = choose_item(
-      name, {"Сохранить как Range", "Сохранить как Cidr"},
-      std::to_string(count) + " диапазон(ов)");
-  if (sel < 0) return false;
-  format = sel == 0 ? SaveFormat::Ranges : SaveFormat::Cidr;
-  return true;
+std::filesystem::path build_save_dir(const State &st,
+                                     const std::string &leaf_name) {
+  std::filesystem::path dir;
+  // Первый кадр - корень ("suip.biz"), его в путь не включаем.
+  for (size_t i = 1; i < st.stack.size(); ++i)
+    dir /= sanitize_path_segment(st.stack[i].title);
+  // Если сохраняемая цель уже представлена текущим кадром (download_all),
+  // не дублируем конечный сегмент.
+  if (st.stack.empty() || st.stack.back().title != leaf_name)
+    dir /= sanitize_path_segment(leaf_name);
+  if (dir.empty()) dir = sanitize_path_segment(leaf_name);
+  return dir;
+}
+
+// Диалог сохранения: формат + чекбокс создания поддиректорий.
+// Состояние чекбокса берётся из конфига и сохраняется при изменении.
+bool choose_save_options(State &st, const std::string &name, size_t count,
+                         SaveFormat &format) {
+  int sel = 0;
+  bool create_subdirs = st.config.create_subdirs;
+
+  for (;;) {
+    int rows = 0;
+    int cols = 0;
+    getmaxyx(stdscr, rows, cols);
+
+    int w = std::min(cols - 2, 64);
+    if (w < 20) w = cols > 4 ? cols - 2 : 1;
+    const int h = std::min(rows > 0 ? rows : 1, 10);
+    const int y = std::max(0, (rows - h) / 2);
+    const int x = std::max(0, (cols - w) / 2);
+
+    WINDOW *win = newwin(h, w, y, x);
+    if (!win) return false;
+    keypad(win, TRUE);
+    box(win, 0, 0);
+
+    mvwaddstr(win, 0, 2, clip_utf8(" " + name + " ", w - 4).c_str());
+    mvwaddstr(win, 1, 2,
+              clip_utf8(std::to_string(count) + " диапазон(ов)", w - 4).c_str());
+
+    const std::vector<std::string> items = {
+        "Сохранить как Range",
+        "Сохранить как Cidr",
+        std::string("[") + (create_subdirs ? "x" : " ") +
+            "] Создавать поддиректории",
+    };
+
+    for (size_t i = 0; i < items.size(); ++i) {
+      const int line = 3 + static_cast<int>(i);
+      if (line >= h - 2) break;
+      const std::string text =
+          std::string(i == static_cast<size_t>(sel) ? "> " : "  ") + items[i];
+      if (i == static_cast<size_t>(sel)) wattron(win, A_REVERSE);
+      mvwaddstr(win, line, 2, clip_utf8(text, w - 4).c_str());
+      if (i == static_cast<size_t>(sel)) wattroff(win, A_REVERSE);
+    }
+
+    if (h >= 2)
+      mvwaddstr(win, h - 2, 2,
+                clip_utf8("↑/↓ выбор  Enter/Space - выбрать  Esc - отмена",
+                          w - 4)
+                    .c_str());
+    wrefresh(win);
+
+    const int ch = wgetch(win);
+    delwin(win);
+    touchwin(stdscr);
+
+    if (ch == KEY_UP || ch == 'k') {
+      if (sel > 0) --sel;
+    } else if (ch == KEY_DOWN || ch == 'j') {
+      if (sel + 1 < static_cast<int>(items.size())) ++sel;
+    } else if (ch == ' ' && sel == 2) {
+      create_subdirs = !create_subdirs;
+    } else if (ch == '\n' || ch == '\r' || ch == KEY_ENTER) {
+      if (sel == 2) {
+        create_subdirs = !create_subdirs;
+        continue;
+      }
+      format = sel == 0 ? SaveFormat::Ranges : SaveFormat::Cidr;
+      if (st.config.create_subdirs != create_subdirs) {
+        st.config.create_subdirs = create_subdirs;
+        if (!save_config(st.config))
+          set_status(st, "Не удалось сохранить config.json", true);
+      }
+      return true;
+    } else if (ch == 27) {
+      return false;
+    }
+  }
 }
 
 void offer_save(State &st, const std::string &name,
@@ -405,24 +490,38 @@ void offer_save(State &st, const std::string &name,
   }
 
   SaveFormat format = SaveFormat::Ranges;
-  if (!choose_format(name, ranges.size(), format)) {
+  if (!choose_save_options(st, name, ranges.size(), format)) {
     set_status(st, "Сохранение отменено", false);
     return;
   }
 
   const std::vector<std::string> lines =
       format == SaveFormat::Cidr ? to_cidr(ranges) : ranges;
-  const std::string path = sanitize_filename(name) +
-                           (format == SaveFormat::Cidr ? ".cidr.txt"
-                                                       : ".ranges.txt");
+  const std::string file_name = sanitize_filename(name) +
+                                (format == SaveFormat::Cidr ? ".cidr.txt"
+                                                            : ".ranges.txt");
 
-  if (!write_lines(path, lines)) {
-    set_status(st, "Ошибка записи файла: " + path, true);
+  std::filesystem::path out_path;
+  if (st.config.create_subdirs) {
+    std::filesystem::path dir = build_save_dir(st, name);
+    std::error_code ec;
+    std::filesystem::create_directories(dir, ec);
+    if (ec) {
+      set_status(st, "Ошибка создания каталога: " + dir.string(), true);
+      return;
+    }
+    out_path = dir / file_name;
+  } else {
+    out_path = file_name;
+  }
+
+  if (!write_lines(out_path, lines)) {
+    set_status(st, "Ошибка записи файла: " + out_path.string(), true);
     return;
   }
 
   set_status(st, "Сохранено " + std::to_string(lines.size()) + " строк в " +
-                     path,
+                     out_path.string(),
              false);
 }
 

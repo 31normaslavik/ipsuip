@@ -30,12 +30,17 @@ Config load_config() {
   if (proxy && proxy->is_string())
     cfg.proxy = std::string(proxy->as_string().c_str());
 
+  const boost::json::value *subdirs = root.as_object().if_contains("create_subdirs");
+  if (subdirs && subdirs->is_bool())
+    cfg.create_subdirs = subdirs->as_bool();
+
   return cfg;
 }
 
 bool save_config(const Config &cfg) {
   boost::json::object root;
   root["proxy"] = cfg.proxy;
+  root["create_subdirs"] = cfg.create_subdirs;
 
   const std::string text = boost::json::serialize(root);
 

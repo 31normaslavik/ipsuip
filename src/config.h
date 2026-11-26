@@ -11,9 +11,10 @@ namespace ipsuip {
 // %APPDATA%/ipsuip/config.json (Windows).
 std::filesystem::path default_config_path();
 
-// Единственная опция конфига.
+// Опции конфига.
 struct Config {
-  std::string proxy; // "[scheme://][user:pass@]host:port", пусто — без прокси
+  std::string proxy;        // "[scheme://][user:pass@]host:port", пусто — без прокси
+  bool create_subdirs = false; // сохранять IP в поддиректориях по иерархии
 };
 
 // Загружает конфиг. Если файла нет — возвращает Config с пустым прокси.
