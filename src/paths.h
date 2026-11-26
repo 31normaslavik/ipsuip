@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Платформенные пути: кэш и конфиг для ipsuip. **/

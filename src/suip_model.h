@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Общая модель данных suip.biz: цель иерархии, содержимое страницы. **/

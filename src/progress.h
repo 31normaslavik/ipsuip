@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Консольный индикатор прогресса загрузки (обновление в stderr). **/

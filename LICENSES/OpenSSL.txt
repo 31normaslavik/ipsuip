@@ -1,0 +1,10 @@
+OpenSSL 3.6.5
+
+OpenSSL is licensed under the Apache License, Version 2.0 with the OpenSSL
+exception. The full Apache-2.0 text is in LICENSES/Apache-2.0.txt; the
+OpenSSL-specific exception and notices are distributed with OpenSSL itself
+and apply when IPSUIP_BUNDLED_OPENSSL=ON copies libssl/libcrypto into the
+package.
+
+Project: https://www.openssl.org/
+License: https://github.com/openssl/openssl/blob/master/LICENSE.txt

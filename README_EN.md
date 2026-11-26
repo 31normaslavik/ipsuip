@@ -172,3 +172,9 @@ Example `config.json`:
 Supported: `http://`, `https://`, `socks5://`, `socks5h://`, `host:port`,
 login/password, and IPv6. Priority: `--proxy` > config; `--no-proxy` disables
 the proxy for the current run.
+
+## License
+
+`ipsuip` is distributed under the [MIT License](LICENSE). Third-party licenses
+and attribution are listed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md);
+full texts are in [`LICENSES/`](LICENSES/).

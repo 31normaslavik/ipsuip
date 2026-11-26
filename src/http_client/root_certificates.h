@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: BSL-1.0
+// Copyright (c) 2016-2019 Vinnie Falco
+// Based on the Boost.Beast root_certificates example.
 #pragma once
 #include <boost/asio/ssl/context.hpp>
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Интерактивный TUI-браузер иерархии suip.biz (PDCursesMod). **/

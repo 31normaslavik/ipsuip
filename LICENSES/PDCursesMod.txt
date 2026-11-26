@@ -1,0 +1,13 @@
+PDCursesMod 4.5.4 — Public Domain Curses (Modified)
+
+Source: https://github.com/Bill-Gray/PDCursesMod
+
+The core package is in the public domain, but small portions of PDCursesMod
+are subject to copyright under various licenses. Each upstream directory
+contains a README file with a section titled "Distribution Status" describing
+the status of the files in that directory.
+
+ipsuip uses only pdcurses/*.c and the vt (Unix) / wincon (Windows) port.
+An acknowledgement is appreciated but not mandatory.
+
+This software is provided AS IS with NO WARRANTY whatsoever.

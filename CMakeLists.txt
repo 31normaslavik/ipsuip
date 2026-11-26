@@ -287,7 +287,13 @@ install(TARGETS ipsuip
   RUNTIME DESTINATION "${CMAKE_INSTALL_BINDIR}"
   BUNDLE DESTINATION .
 )
-install(FILES README.md DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+install(FILES
+  README.md
+  LICENSE
+  THIRD_PARTY_NOTICES.md
+  DESTINATION "${CMAKE_INSTALL_DOCDIR}"
+)
+install(DIRECTORY LICENSES DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 
 # ---------------------------------------------------------------------------
 # CPack: ZIP/NSIS для Windows, TGZ/DEB для Linux
@@ -300,6 +306,7 @@ set(CPACK_PACKAGE_CONTACT "https://github.com/31normaslavik/ipsuip_develop")
 set(CPACK_PACKAGE_HOMEPAGE_URL "https://github.com/31normaslavik/ipsuip_develop")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Просмотр и экспорт IP-списков suip.biz")
 set(CPACK_RESOURCE_FILE_README "${PROJECT_SOURCE_DIR}/README.md")
+set(CPACK_RESOURCE_FILE_LICENSE "${PROJECT_SOURCE_DIR}/LICENSE")
 set(CPACK_PACKAGE_INSTALL_DIRECTORY "ipsuip")
 
 if(WIN32)

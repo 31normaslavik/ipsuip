@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 /** Made by I'm Pancake **/
 
 #include "ip_convert.h"

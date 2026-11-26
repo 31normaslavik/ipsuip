@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include "suip_model.h"
 
 #include "http_client_sync_ssl.h"

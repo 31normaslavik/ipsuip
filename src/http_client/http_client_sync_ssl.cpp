@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #include "http_client_sync_ssl.h"
 #include "proxy.h"
 #include "root_certificates.h"

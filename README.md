@@ -170,3 +170,10 @@ ipsuip --tui
 Поддерживаются `http://`, `https://`, `socks5://`, `socks5h://`, `host:port`,
 логин/пароль и IPv6. Приоритет: `--proxy` > конфиг; `--no-proxy` отключает
 прокси для текущего запуска.
+
+## Лицензия
+
+`ipsuip` распространяется под лицензией [MIT](LICENSE). Лицензии зависимостей
+и атрибуция стороннего кода перечислены в
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md); полные тексты — в
+[`LICENSES/`](LICENSES/).

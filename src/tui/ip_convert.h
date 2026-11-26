@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Преобразования для сохранения IP-списков: диапазоны -> CIDR, имена файлов. **/

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** Синхронный HTTPS-клиент: GET по полному URL, внутренняя реализация на

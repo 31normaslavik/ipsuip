@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT
 #pragma once
 
 /** JSON-кэш навигационных страниц suip.biz (списки целей иерархии). **/
