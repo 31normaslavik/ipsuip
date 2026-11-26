@@ -11,6 +11,9 @@ permissions:
 
 jobs:
   scorecard:
+    # Scorecard использует публичный GraphQL API и не работает с приватным репозиторием.
+    # Для приватного репо с доступом задайте variable SCORECARD_ENABLED=true.
+    if: github.event.repository.visibility == 'public' || vars.SCORECARD_ENABLED == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:

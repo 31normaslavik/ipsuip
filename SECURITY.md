@@ -31,8 +31,11 @@
 
 Сейчас репозиторий приватный: GitHub API отклоняет включение branch/tag
 protection и secret scanning с сообщением «Upgrade to GitHub Pro or make this
-repository public». После смены тарифа или публикации репозитория примените
-настройки выше; до этого их соблюдение лежит на мейнтейнерах.
+repository public». CodeQL и OSSF Scorecard пропускаются в workflows для
+приватного репозитория (анализ требует code scanning / публичного GraphQL API);
+при наличии доступа их можно включить variable `CODEQL_ENABLED=true` /
+`SCORECARD_ENABLED=true`. После смены тарифа или публикации репозитория
+примените настройки выше; до этого их соблюдение лежит на мейнтейнерах.
 
 ## Что считается уязвимостью
 
