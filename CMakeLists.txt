@@ -336,11 +336,15 @@ install(TARGETS ipsuip
 )
 install(FILES
   README.md
+  README_EN.md
   LICENSE
   THIRD_PARTY_NOTICES.md
+  CONTRIBUTING.md
+  SECURITY.md
+  CHANGELOG.md
   DESTINATION "${CMAKE_INSTALL_DOCDIR}"
 )
-install(DIRECTORY LICENSES DESTINATION "${CMAKE_INSTALL_DOCDIR}")
+install(DIRECTORY LICENSES docs DESTINATION "${CMAKE_INSTALL_DOCDIR}")
 
 # ---------------------------------------------------------------------------
 # CPack: ZIP/NSIS для Windows, TGZ для macOS, TGZ/DEB для Linux
