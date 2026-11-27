@@ -29,14 +29,6 @@
 - Включить secret scanning и Dependency graph, приватный reporting (см. выше).
 - Требовать подписанные коммиты/теги, если ключи доступны мейнтейнерам.
 
-Сейчас репозиторий приватный: GitHub API отклоняет включение branch/tag
-protection и secret scanning с сообщением «Upgrade to GitHub Pro or make this
-repository public». CodeQL и OSSF Scorecard пропускаются в workflows для
-приватного репозитория (анализ требует code scanning / публичного GraphQL API);
-при наличии доступа их можно включить variable `CODEQL_ENABLED=true` /
-`SCORECARD_ENABLED=true`. После смены тарифа или публикации репозитория
-примените настройки выше; до этого их соблюдение лежит на мейнтейнерах.
-
 ## Что считается уязвимостью
 
 Ошибки проверки TLS-сертификатов, запись учётных данных прокси в
